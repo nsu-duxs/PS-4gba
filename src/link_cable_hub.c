@@ -992,6 +992,32 @@ void link_hub_reset(void) {
     }
 }
 
+void link_hub_reset_buffers(void) {
+    link_lock();
+    _link_hub_abort_transfer(&g_link_hub);
+    __atomic_store_n(&g_link_hub.slice_interrupt, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_link_hub.active_transfer_lines, 16, __ATOMIC_RELEASE);
+    g_link_hub.transfer_cycles = 0;
+    g_link_hub.transfer_finish_elapsed = 0;
+
+    for (int i = 0; i < LINK_MAX_PLAYERS; ++i) {
+        g_link_hub.multi_data[i] = 0xFFFFU;
+        g_link_hub.pending_multi_send[i] = 0xFFFFU;
+        g_link_hub.normal8_data[i] = 0xFFU;
+        g_link_hub.normal32_data[i] = 0xFFFFFFFFU;
+
+        struct GBA* g = g_link_hub.gba[i];
+        if (g) {
+            mTimingDeschedule(&g->timing, &g_link_hub.drivers[i].transfer_event);
+            mTimingDeschedule(&g->timing, &g_link_hub.drivers[i].lockstep_event);
+            mTimingDeschedule(&g->timing, &g->sio.completeEvent);
+        }
+    }
+
+    _link_hub_refresh_multi_status(&g_link_hub);
+    link_unlock();
+}
+
 void link_hub_set_cable_enabled(bool enabled) {
     g_link_hub.cable_enabled = enabled;
     g_link_hub.hotplug_disconnect_frames = 0;

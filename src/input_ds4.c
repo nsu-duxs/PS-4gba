@@ -100,6 +100,12 @@ void input_poll_all(struct PS4GBA_Context* ctx) {
         refresh_pad_handles();
     }
 
+    for (int i = 0; i < GBA_MAX_INSTANCES; ++i) {
+        if (s_user_ids[i] > 0) {
+            ctx->instances[i].user_id = s_user_ids[i];
+        }
+    }
+
     UIAppState app_state = ui_menu_get_state();
 
     for (int i = 0; i < GBA_MAX_INSTANCES; ++i) {

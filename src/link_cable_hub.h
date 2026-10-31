@@ -51,6 +51,7 @@ void link_hub_init(void);
 bool link_hub_attach(struct mCore* cores[], int num_cores);
 bool link_hub_attach_instance(int player_id, struct mCore* core);
 void link_hub_reset(void);
+void link_hub_reset_buffers(void);
 void link_hub_begin_frame(void);
 void link_hub_sync_pins(void);
 void link_hub_latch_transfer_data(void);

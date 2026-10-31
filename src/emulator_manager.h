@@ -35,6 +35,9 @@ bool emulator_join_player(int slot_index, OrbisUserServiceUserId user_id);
 void emulator_step_lockstep_frame(void);
 void emulator_parallel_render_video(uint32_t* back_buffer, struct PS4GBA_Context* ctx);
 void emulator_destroy_all(void);
+void emulator_pause_workers(void);
+void emulator_prepare_instance_for_save(int slot_index);
+void emulator_restore_instance_after_state(int slot_index);
 
 /* Suporte nativo a Trapacas / Cheats (.cht) */
 bool emulator_find_cheat_file(const char* rom_path, const char* rom_name, char* out_path, size_t max_len);

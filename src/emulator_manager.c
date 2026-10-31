@@ -199,6 +199,16 @@ static bool instantiate_player_slot(int slot_index, const char* path, OrbisUserS
  * ciclo a ciclo para que as ISRs de Serial (`GBA_IRQ_SIO`) dos Escravos respondam
  * imediatamente dentro da mesma fatia de tempo.
  */
+static inline void flush_gba_timing_reroot(struct GBA* gba) {
+    if (!gba) {
+        return;
+    }
+    if (gba->timing.reroot) {
+        gba->timing.root = gba->timing.reroot;
+        gba->timing.reroot = NULL;
+    }
+}
+
 static inline bool step_instance_slice(int idx, uint32_t slice_target) {
     struct GBA* gba = s_frame_gbas[idx];
     if (!gba || !gba->cpu) {
@@ -211,6 +221,7 @@ static inline bool step_instance_slice(int idx, uint32_t slice_target) {
     bool master_started = false;
 
     while (gba->video.frameCounter == start_frame) {
+        flush_gba_timing_reroot(gba);
         if (gba->cpu->halted) {
             gba->cpu->cycles = 0;
         }
@@ -220,7 +231,9 @@ static inline bool step_instance_slice(int idx, uint32_t slice_target) {
         }
 
         mTimingDeschedule(&gba->timing, lockstep_ev);
+    flush_gba_timing_reroot(gba);
         mTimingSchedule(&gba->timing, lockstep_ev, remaining);
+        flush_gba_timing_reroot(gba);
 
         if (gba->cpu->halted) {
             gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
@@ -228,6 +241,7 @@ static inline bool step_instance_slice(int idx, uint32_t slice_target) {
         }
 
         ARMRunLoop(gba->cpu);
+        flush_gba_timing_reroot(gba);
 
         if (gba->cpu->halted) {
             gba->cpu->cycles = 0;
@@ -244,6 +258,7 @@ static inline bool step_instance_slice(int idx, uint32_t slice_target) {
     }
 
     mTimingDeschedule(&gba->timing, lockstep_ev);
+    flush_gba_timing_reroot(gba);
     gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
     return master_started;
 }
@@ -258,6 +273,7 @@ static inline void finish_instance_frame(int idx) {
     struct mTimingEvent* lockstep_ev = &g_link_hub.drivers[idx].lockstep_event;
 
     mTimingDeschedule(&gba->timing, lockstep_ev);
+    flush_gba_timing_reroot(gba);
     gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
 
     while (gba->video.frameCounter == start_frame &&
@@ -268,6 +284,7 @@ static inline void finish_instance_frame(int idx) {
             gba->cpu->cycles = gba->cpu->nextEvent;
         }
         ARMRunLoop(gba->cpu);
+        flush_gba_timing_reroot(gba);
         if (gba->cpu->halted) {
             gba->cpu->cycles = 0;
             gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
@@ -523,6 +540,13 @@ void emulator_step_lockstep_frame(void) {
             struct GBA* gba = (struct GBA*)g_gba_ctx.instances[i].core->board;
             gba->video.frameskip = 0;
             gba->video.frameskipCounter = skip_render ? 1 : 0;
+            flush_gba_timing_reroot(gba);
+            if (gba->cpu) {
+                if (gba->cpu->halted) {
+                    gba->cpu->cycles = 0;
+                }
+                gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
+            }
             if (gba->cpu && gba->cpu->halted) {
                 gba->cpu->cycles = 0;
                 gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
@@ -692,6 +716,68 @@ void emulator_destroy_all(void) {
 /* ==============================================================================
  * SUBSISTEMA DE TRAPACAS / CHEATS (.cht) - INTEGRACAO LIBMGBA & ARMAZENAMENTO PS4
  * ============================================================================== */
+
+/* ==============================================================================
+ * SINCRONIZACAO E SUPORTE A SAVE STATE / LOAD STATE
+ * ============================================================================== */
+
+void emulator_pause_workers(void) {
+    for (int j = 1; j < GBA_MAX_INSTANCES; ++j) {
+        if (s_workers[j].thread_created) {
+            while (__atomic_load_n(&s_workers[j].command, __ATOMIC_ACQUIRE) != 0) {
+                __builtin_ia32_pause();
+            }
+        }
+    }
+}
+
+void emulator_prepare_instance_for_save(int slot_index) {
+    if (slot_index < 0 || slot_index >= GBA_MAX_INSTANCES) {
+        return;
+    }
+    struct mCore* core = g_gba_ctx.instances[slot_index].core;
+    if (!core || !core->board) {
+        return;
+    }
+    struct GBA* gba = (struct GBA*)core->board;
+    mTimingDeschedule(&gba->timing, &g_link_hub.drivers[slot_index].lockstep_event);
+    mTimingDeschedule(&gba->timing, &g_link_hub.drivers[slot_index].transfer_event);
+    flush_gba_timing_reroot(gba);
+    gba->earlyExit = false;
+    if (gba->cpu) {
+        if (gba->cpu->halted || gba->cpu->cycles < 0 ||
+            gba->cpu->cycles >= (int32_t)GBA_ARM7TDMI_FREQUENCY) {
+            gba->cpu->cycles = 0;
+        }
+        gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
+    }
+}
+
+void emulator_restore_instance_after_state(int slot_index) {
+    if (slot_index < 0 || slot_index >= GBA_MAX_INSTANCES) {
+        return;
+    }
+    struct mCore* core = g_gba_ctx.instances[slot_index].core;
+    if (!core || !core->board) {
+        return;
+    }
+    struct GBA* gba = (struct GBA*)core->board;
+    mTimingDeschedule(&gba->timing, &g_link_hub.drivers[slot_index].lockstep_event);
+    mTimingDeschedule(&gba->timing, &g_link_hub.drivers[slot_index].transfer_event);
+    flush_gba_timing_reroot(gba);
+    gba->earlyExit = false;
+    if (gba->cpu) {
+        if (gba->cpu->halted || gba->cpu->cycles < 0 ||
+            gba->cpu->cycles >= (int32_t)GBA_ARM7TDMI_FREQUENCY) {
+            gba->cpu->cycles = 0;
+        }
+        gba->cpu->nextEvent = mTimingNextEvent(&gba->timing);
+    }
+    if (g_link_hub.gba[slot_index]) {
+        GBASIOSetDriver(&gba->sio, &g_link_hub.drivers[slot_index].d);
+    }
+    video_request_clear_framebuffers();
+}
 
 static const char* safe_strcasestr(const char* haystack, const char* needle) {
     if (!haystack || !needle) return NULL;

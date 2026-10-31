@@ -69,10 +69,10 @@ enum {
 /* Itens da aba Saves no Menu OSD */
 enum {
     OSD_SAVE_RESUME = 0,
-    OSD_SAVE_QUICK_SAVE,
-    OSD_SAVE_QUICK_LOAD,
-    OSD_SAVE_GROUP_SAVE,
-    OSD_SAVE_GROUP_LOAD,
+    OSD_SAVE_TYPE,
+    OSD_SAVE_SLOT,
+    OSD_SAVE_ACTION_SAVE,
+    OSD_SAVE_ACTION_LOAD,
     OSD_SAVE_RETURN_LAUNCHER,
     OSD_SAVE_COUNT
 };
@@ -139,6 +139,51 @@ static int s_osd_cfg_cursor = 0;
 static int s_osd_link_cursor = 0;
 static int s_osd_player = 0;
 static char s_osd_status[128] = "";
+static int s_osd_toast_frames = 0;
+static bool s_osd_toast_is_error = false;
+
+/* Cache de Preview Visual (Thumbnail 240x160 ARGB + Data/Hora) - Zero I/O no loop de renderizacao */
+static uint32_t s_thumb_cache_pixels[SAVE_THUMB_PIXELS] __attribute__((aligned(64)));
+static PS4SaveStatePreview s_thumb_cache_info;
+static bool s_thumb_cache_dirty = true;
+static int s_thumb_cache_slot = -1;
+static int s_thumb_cache_player = -1;
+static bool s_thumb_cache_is_group = false;
+static uint32_t s_thumb_cache_uid = 0;
+
+static void ui_refresh_save_preview_if_needed(struct PS4GBA_Context* ctx) {
+    int cur_slot = save_manager_get_slot();
+    bool is_grp = (save_manager_get_mode() == SAVE_MODE_GROUP);
+    uint32_t cur_uid = is_grp
+                           ? save_manager_get_active_user_id()
+                           : (uint32_t)save_manager_get_user_id_for_player(s_osd_player);
+    if (!s_thumb_cache_dirty &&
+        s_thumb_cache_slot == cur_slot &&
+        s_thumb_cache_player == s_osd_player &&
+        s_thumb_cache_is_group == is_grp &&
+        s_thumb_cache_uid == cur_uid) {
+        return;
+    }
+
+    s_thumb_cache_slot = cur_slot;
+    s_thumb_cache_player = s_osd_player;
+    s_thumb_cache_is_group = is_grp;
+    s_thumb_cache_uid = cur_uid;
+    s_thumb_cache_dirty = false;
+
+    save_manager_load_state_preview(ctx, s_osd_player, cur_slot, is_grp,
+                                    &s_thumb_cache_info, s_thumb_cache_pixels);
+}
+
+static void ui_trigger_osd_toast(const char* msg, bool is_error) {
+    if (!msg) {
+        return;
+    }
+    strncpy(s_osd_status, msg, sizeof(s_osd_status) - 1);
+    s_osd_status[sizeof(s_osd_status) - 1] = '\0';
+    s_osd_toast_is_error = is_error;
+    s_osd_toast_frames = 120;
+}
 
 /* ==============================================================================
  * PRIMITIVAS DE RENDERIZACAO E TIPOGRAFIA
@@ -1110,6 +1155,7 @@ void ui_menu_open_osd(int trigger_player) {
     s_osd_cheat_scroll = 0;
     s_osd_status[0] = '\0';
     s_controls_view_gba = false;
+    s_thumb_cache_dirty = true;
     s_app_state = UI_STATE_OSD;
     audio_play_sfx(UI_SFX_CONFIRM);
 
@@ -1507,8 +1553,8 @@ void ui_menu_render_splash(uint32_t* fb) {
             ui_draw_text(fb, cx - 80, banner_y + 16, "PS", COLOR_PS_NEON_BLUE, 4);
             ui_draw_text(fb, cx - 16, banner_y + 16, "gba", COLOR_TEXT_GOLD, 4);
 
-            /* Subtitulo em Amarelo Dourado */
-            ui_draw_text(fb, cx - 216, banner_y + 64, "4-WAY SPLIT-SCREEN EMULATOR", COLOR_TEXT_GOLD, 2);
+            /* Subtitulo em Amarelo Dourado com Versao v1.0.9 */
+            ui_draw_text(fb, cx - 272, banner_y + 64, "4-WAY SPLIT-SCREEN EMULATOR v1.0.9", COLOR_TEXT_GOLD, 2);
         }
     }
 
@@ -1883,6 +1929,7 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
     }
 
     /* Na aba de controles, Touchpad alterna entre DualShock 4 e Game Boy Advance */
+
     if (s_osd_tab == OSD_TAB_CONTROLS) {
         if (buttons_pressed & ORBIS_PAD_BUTTON_TOUCH_PAD) {
             s_controls_view_gba = !s_controls_view_gba;
@@ -1930,38 +1977,106 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
             s_osd_saves_cursor = (s_osd_saves_cursor + 1) % OSD_SAVE_COUNT;
         }
 
+        if (buttons_pressed & (ORBIS_PAD_BUTTON_LEFT | ORBIS_PAD_BUTTON_RIGHT)) {
+            int delta = (buttons_pressed & ORBIS_PAD_BUTTON_RIGHT) ? 1 : -1;
+            if (s_osd_saves_cursor == OSD_SAVE_TYPE) {
+                save_manager_toggle_mode();
+                s_thumb_cache_dirty = true;
+                audio_play_sfx(UI_SFX_VALUE_CHANGE);
+                char msg[128];
+                if (save_manager_get_mode() == SAVE_MODE_GROUP) {
+                    snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: GRUPO");
+                } else {
+                    snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: INDIVIDUAL");
+                }
+                ui_trigger_osd_toast(msg, false);
+            } else {
+                save_manager_cycle_slot(delta);
+                s_thumb_cache_dirty = true;
+                audio_play_sfx(UI_SFX_VALUE_CHANGE);
+                char msg[128];
+                snprintf(msg, sizeof(msg), "[SLOT] Slot %d selecionado", save_manager_get_slot());
+                ui_trigger_osd_toast(msg, false);
+            }
+        }
+
         if (buttons_pressed & ORBIS_PAD_BUTTON_CROSS) {
             audio_play_sfx(UI_SFX_CONFIRM);
+            bool is_grp = (save_manager_get_mode() == SAVE_MODE_GROUP);
+            int cur_slot = save_manager_get_slot();
+
             switch (s_osd_saves_cursor) {
             case OSD_SAVE_RESUME:
                 s_app_state = UI_STATE_INGAME;
                 break;
-            case OSD_SAVE_QUICK_SAVE:
-                if (save_manager_quick_save_state(ctx, s_osd_player)) {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Quick Save P%d salvo com sucesso!", s_osd_player + 1);
-                } else {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Erro ao salvar Quick Save P%d", s_osd_player + 1);
+            case OSD_SAVE_TYPE:
+                save_manager_toggle_mode();
+                s_thumb_cache_dirty = true;
+                {
+                    char msg[128];
+                    if (save_manager_get_mode() == SAVE_MODE_GROUP) {
+                        snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: GRUPO");
+                    } else {
+                        snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: INDIVIDUAL");
+                    }
+                    ui_trigger_osd_toast(msg, false);
                 }
                 break;
-            case OSD_SAVE_QUICK_LOAD:
-                if (save_manager_quick_load_state(ctx, s_osd_player)) {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Quick Load P%d carregado com sucesso!", s_osd_player + 1);
-                } else {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Quick Save P%d nao encontrado", s_osd_player + 1);
+            case OSD_SAVE_SLOT:
+                save_manager_cycle_slot(1);
+                s_thumb_cache_dirty = true;
+                {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "[SLOT] Slot %d selecionado", save_manager_get_slot());
+                    ui_trigger_osd_toast(msg, false);
                 }
                 break;
-            case OSD_SAVE_GROUP_SAVE:
-                if (save_manager_group_save_state(ctx)) {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Group Save State (4P) salvo com sucesso!");
+            case OSD_SAVE_ACTION_SAVE:
+                if (is_grp) {
+                    if (save_manager_group_save_state_slot(ctx, cur_slot)) {
+                        s_thumb_cache_dirty = true;
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado de Grupo salvo no Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, false);
+                    } else {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[ERRO] Falha ao salvar Estado de Grupo no Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, true);
+                    }
                 } else {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Erro ao salvar Group Save State");
+                    if (save_manager_quick_save_state_slot(ctx, s_osd_player, cur_slot)) {
+                        s_thumb_cache_dirty = true;
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado salvo no Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, false);
+                    } else {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[ERRO] Falha ao salvar Estado no Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, true);
+                    }
                 }
                 break;
-            case OSD_SAVE_GROUP_LOAD:
-                if (save_manager_group_load_state(ctx)) {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Group Save State (4P) carregado com sucesso!");
+            case OSD_SAVE_ACTION_LOAD:
+                if (is_grp) {
+                    if (save_manager_group_load_state_slot(ctx, cur_slot)) {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado de Grupo carregado do Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, false);
+                    } else {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[ERRO] Slot %d vazio!", cur_slot);
+                        ui_trigger_osd_toast(msg, true);
+                    }
                 } else {
-                    snprintf(s_osd_status, sizeof(s_osd_status), "Group Save State nao encontrado");
+                    if (save_manager_quick_load_state_slot(ctx, s_osd_player, cur_slot)) {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado carregado do Slot %d!", cur_slot);
+                        ui_trigger_osd_toast(msg, false);
+                    } else {
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "[ERRO] Slot %d vazio!", cur_slot);
+                        ui_trigger_osd_toast(msg, true);
+                    }
                 }
                 break;
             case OSD_SAVE_RETURN_LAUNCHER:
@@ -2161,7 +2276,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
     draw_rect_border(fb, 40, 24, PS4_SCREEN_WIDTH - 80, PS4_SCREEN_HEIGHT - 48, 3, COLOR_BORDER_CYAN);
     draw_rect_border(fb, 46, 30, PS4_SCREEN_WIDTH - 92, PS4_SCREEN_HEIGHT - 60, 1, COLOR_BORDER_INNER);
 
-    ui_draw_text(fb, 70, 44, "PSgba - GBA 4-WAY SPLIT-SCREEN EMULATOR v1.09", COLOR_TEXT_GOLD, 3);
+    ui_draw_text(fb, 70, 44, "PSgba - GBA 4-WAY SPLIT-SCREEN EMULATOR v1.0.9", COLOR_TEXT_GOLD, 3);
 
     const char* tabs[LAUNCHER_TAB_COUNT] = {
         "[ JOGOS ]",
@@ -2231,6 +2346,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
         }
 
         /* Renderiza painel lateral somente se expandido */
+
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
             ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "DETALHES DO JOGO", COLOR_TEXT_GOLD, 2, side_w - 48);
@@ -2311,6 +2427,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
         ui_draw_text_truncated(fb, left_x + 30, left_y + 710,
                                "[ESQUERDA / DIREITA / X] Alterar   [D-PAD CIMA/BAIXO] Navegar",
                                COLOR_TEXT_MUTED, 2, left_w - 60);
+
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
@@ -2426,11 +2543,11 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
     draw_rect_border(fb, box_x, box_y, box_w, box_h, 3, COLOR_BORDER_CYAN);
     draw_rect_border(fb, box_x + 6, box_y + 6, box_w - 12, box_h - 12, 1, COLOR_BORDER_INNER);
 
-    /* Linha superior: Titulo formatado estritamente como MENU - CONTROLE P%d (%s) */
+    /* Linha superior: Titulo formatado com versao v1.0.9 */
     char title[160];
-    snprintf(title, sizeof(title), "MENU - CONTROLE P%d (%s)",
+    snprintf(title, sizeof(title), "MENU v1.0.9 - CONTROLE P%d (%s)",
              s_osd_player + 1, ctx ? ctx->rom_name : "");
-    ui_draw_text_truncated(fb, box_x + 36, box_y + 24, title, COLOR_TEXT_GOLD, 3, 1150);
+    ui_draw_text_truncated(fb, box_x + 36, box_y + 24, title, COLOR_TEXT_GOLD, 3, 1280);
 
     char link_tag[64];
     snprintf(link_tag, sizeof(link_tag), "[LINK: %s]",
@@ -2571,6 +2688,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
             }
         }
 
+
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
             ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "DETALHES DO CHEAT", COLOR_TEXT_GOLD, 2, side_w - 48);
@@ -2637,60 +2755,139 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
     }
 
     if (s_osd_tab == OSD_TAB_SAVES) {
-        draw_box_rpg(fb, left_x, left_y, left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-        ui_draw_text(fb, left_x + 30, left_y + 24, "GERENCIAMENTO DE JOGO & SAVES", COLOR_TEXT_GOLD, 2);
-        draw_rect_solid(fb, left_x + 20, left_y + 56, left_w - 40, 1, COLOR_BORDER_INNER);
+        int saves_side_w = 560;
+        int saves_gap = 24;
+        int saves_left_w = total_avail_w - saves_side_w - saves_gap;
+        int saves_side_x = left_x + saves_left_w + saves_gap;
 
-        char item_qsave[128], item_qload[128];
-        snprintf(item_qsave, sizeof(item_qsave), "Quick Save (Slot Individual P%d)", s_osd_player + 1);
-        snprintf(item_qload, sizeof(item_qload), "Quick Load (Slot Individual P%d)", s_osd_player + 1);
+        ui_refresh_save_preview_if_needed(ctx);
+
+        draw_box_rpg(fb, left_x, left_y, saves_left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
+        ui_draw_text(fb, left_x + 30, left_y + 24, "GERENCIAMENTO DE JOGO & SAVES", COLOR_TEXT_GOLD, 2);
+        draw_rect_solid(fb, left_x + 20, left_y + 56, saves_left_w - 40, 1, COLOR_BORDER_INNER);
+
+        int cur_slot = save_manager_get_slot();
+        bool is_grp_mode = (save_manager_get_mode() == SAVE_MODE_GROUP);
+
+        char item_type[160], item_slot[160], item_save[128], item_load[128];
+        if (is_grp_mode) {
+            snprintf(item_type, sizeof(item_type),
+                     "Tipo de Save: < INDIVIDUAL / [GRUPO] >");
+        } else {
+            snprintf(item_type, sizeof(item_type),
+                     "Tipo de Save: < [INDIVIDUAL] / GRUPO >");
+        }
+        snprintf(item_slot, sizeof(item_slot),
+                 "Slot: < %sSlot 1%s / %sSlot 2%s / %sSlot 3%s >",
+                 cur_slot == 1 ? "[" : "", cur_slot == 1 ? "]" : "",
+                 cur_slot == 2 ? "[" : "", cur_slot == 2 ? "]" : "",
+                 cur_slot == 3 ? "[" : "", cur_slot == 3 ? "]" : "");
+
+        snprintf(item_save, sizeof(item_save), "Salvar Estado");
+        snprintf(item_load, sizeof(item_load), "Carregar Estado");
 
         const char* save_items[OSD_SAVE_COUNT] = {
             "Continuar Jogo",
-            item_qsave,
-            item_qload,
-            "Group Save State (Todas as 4 Telas Juntas)",
-            "Group Load State (Todas as 4 Telas Juntas)",
+            item_type,
+            item_slot,
+            item_save,
+            item_load,
             "Voltar ao Launcher (Fechar ROM)"
         };
 
         for (int i = 0; i < OSD_SAVE_COUNT; ++i) {
             bool is_sel = (s_osd_saves_cursor == i);
-            int row_y = left_y + 86 + i * 86;
+            int row_y = left_y + 82 + i * 82;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 58, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 58, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 8, saves_left_w - 40, 56, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 8, saves_left_w - 40, 56, 1, COLOR_BORDER_CYAN);
             }
 
             char line[180];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", save_items[i]);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 14, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, left_w - 50);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 12, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, saves_left_w - 50);
         }
 
-        if (side_w > 120) {
-            draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "STATUS DA SESSAO", COLOR_TEXT_GOLD, 2, side_w - 48);
-            draw_rect_solid(fb, side_x + 20, left_y + 56, side_w - 40, 1, COLOR_BORDER_INNER);
+        /* Painel Lateral Direito Sempre Visivel: Preview Visual do Save State + Data/Hora */
+        draw_box_rpg(fb, saves_side_x, left_y, saves_side_w, left_h, COLOR_BG, COLOR_BORDER_CYAN);
 
-            int ty = left_y + 80;
-            ui_draw_text(fb, side_x + 24, ty, "SISTEMA DE SAVES:", COLOR_BORDER_CYAN, 2); ty += 36;
-            ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                 "- Saves .sav gravados em flash no PS4.\n\n"
-                                 "- Quick Save: Salva o estado individual do Jogador P#.\n\n"
-                                 "- Group Save: Salva o estado de todas as 4 telas e da comunicacao Link simultaneamente.",
-                                 COLOR_TEXT_WHITE, 2, side_w - 48, 24);
+        char pv_header[96];
+        snprintf(pv_header, sizeof(pv_header), "PREVIEW DO SAVE - SLOT %d", cur_slot);
+        ui_draw_text_truncated(fb, saves_side_x + 24, left_y + 24, pv_header, COLOR_TEXT_GOLD, 2, saves_side_w - 48);
+        draw_rect_solid(fb, saves_side_x + 20, left_y + 56, saves_side_w - 40, 1, COLOR_BORDER_INNER);
 
-            ty = left_y + 360;
-            ui_draw_text(fb, side_x + 24, ty, "JOGADORES ATIVOS:", COLOR_BORDER_CYAN, 2); ty += 36;
-            for (int p = 0; p < GBA_MAX_INSTANCES; ++p) {
-                bool active = (ctx && ctx->instances[p].active);
-                char pstr[64];
-                snprintf(pstr, sizeof(pstr), "Player %d: %s", p + 1, active ? "ATIVO NA PARTIDA" : "Slot Livre");
-                ui_draw_text(fb, side_x + 24, ty + p * 32, pstr,
-                             active ? COLOR_TEXT_GREEN : COLOR_TEXT_MUTED, 2);
+        /* Moldura da Miniatura: 360x240 pixels (escala 1.5x da resolucao 240x160 nativa do GBA) */
+        const int thumb_disp_w = 360;
+        const int thumb_disp_h = 240;
+        int thumb_x = saves_side_x + (saves_side_w - thumb_disp_w) / 2;
+        int thumb_y = left_y + 78;
+
+        draw_rect_border(fb, thumb_x - 6, thumb_y - 6, thumb_disp_w + 12, thumb_disp_h + 12, 2, COLOR_BORDER_CYAN);
+        draw_rect_border(fb, thumb_x - 3, thumb_y - 3, thumb_disp_w + 6, thumb_disp_h + 6, 1, COLOR_TEXT_GOLD);
+
+        if (s_thumb_cache_info.occupied) {
+            if (s_thumb_cache_info.has_thumbnail) {
+                for (int dy = 0; dy < thumb_disp_h; ++dy) {
+                    int py = thumb_y + dy;
+                    if (py < 0 || py >= PS4_SCREEN_HEIGHT) {
+                        continue;
+                    }
+                    int sy = (dy * SAVE_THUMB_HEIGHT) / thumb_disp_h;
+                    const uint32_t* src_row = &s_thumb_cache_pixels[sy * SAVE_THUMB_WIDTH];
+                    uint32_t* dst_row = &fb[py * PS4_SCREEN_WIDTH + thumb_x];
+                    for (int dx = 0; dx < thumb_disp_w; ++dx) {
+                        int sx = (dx * SAVE_THUMB_WIDTH) / thumb_disp_w;
+                        dst_row[dx] = src_row[sx];
+                    }
+                }
+            } else {
+                draw_rect_solid(fb, thumb_x, thumb_y, thumb_disp_w, thumb_disp_h, 0xFF0A1424U);
+                const char* no_thumb_msg = "[ SAVE GRAVADO - SEM MINIATURA ]";
+                int ntw = (int)strlen(no_thumb_msg) * 8;
+                ui_draw_text(fb, thumb_x + (thumb_disp_w - ntw) / 2, thumb_y + 114, no_thumb_msg, COLOR_TEXT_GOLD, 1);
             }
+        } else {
+            /* Slot Vazio: Retangulo escuro com linhas diagonais sutis e mensagem centralizada */
+            draw_rect_solid(fb, thumb_x, thumb_y, thumb_disp_w, thumb_disp_h, 0xFF070B12U);
+            for (int d = -thumb_disp_h; d < thumb_disp_w; d += 18) {
+                for (int dy = 0; dy < thumb_disp_h; dy += 2) {
+                    int dx = d + dy;
+                    if (dx >= 0 && dx < thumb_disp_w) {
+                        int px = thumb_x + dx;
+                        int py = thumb_y + dy;
+                        if (px >= 0 && px < PS4_SCREEN_WIDTH && py >= 0 && py < PS4_SCREEN_HEIGHT) {
+                            fb[py * PS4_SCREEN_WIDTH + px] = 0xFF131E30U;
+                        }
+                    }
+                }
+            }
+            draw_rect_solid(fb, thumb_x + 14, thumb_y + 96, thumb_disp_w - 28, 48, 0xFF0B132BU);
+            draw_rect_border(fb, thumb_x + 14, thumb_y + 96, thumb_disp_w - 28, 48, 1, COLOR_TAB_INACTIVE_BDR);
+            const char* empty_msg = "[ SLOT VAZIO ]";
+            int etw = (int)strlen(empty_msg) * 16;
+            ui_draw_text(fb, thumb_x + (thumb_disp_w - etw) / 2, thumb_y + 112, empty_msg, COLOR_TEXT_MUTED, 2);
         }
+
+        /* Bloco de Metadados imediatamente abaixo da imagem */
+        int meta_y = thumb_y + thumb_disp_h + 24;
+        draw_box_rpg(fb, saves_side_x + 24, meta_y, saves_side_w - 48, 110, 0xFF0E1A2DU, COLOR_BORDER_INNER);
+
+        char line_date[80];
+        char line_time[80];
+
+        if (s_thumb_cache_info.occupied) {
+            snprintf(line_date, sizeof(line_date), "Data: %s", s_thumb_cache_info.date_str);
+            snprintf(line_time, sizeof(line_time), "Hora: %s", s_thumb_cache_info.time_str);
+        } else {
+            snprintf(line_date, sizeof(line_date), "Data: --/--/----");
+            snprintf(line_time, sizeof(line_time), "Hora: --:--:--");
+        }
+
+        ui_draw_text(fb, saves_side_x + 44, meta_y + 24, line_date,
+                     s_thumb_cache_info.occupied ? COLOR_TEXT_WHITE : COLOR_TEXT_MUTED, 2);
+        ui_draw_text(fb, saves_side_x + 44, meta_y + 66, line_time,
+                     s_thumb_cache_info.occupied ? COLOR_TEXT_WHITE : COLOR_TEXT_MUTED, 2);
 
     } else if (s_osd_tab == OSD_TAB_VIDEO_AUDIO) {
         draw_box_rpg(fb, left_x, left_y, left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
@@ -2746,6 +2943,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         ui_draw_text_truncated(fb, left_x + 30, left_y + 668,
                                "[ESQUERDA / DIREITA / X] Alterar em Tempo Real",
                                COLOR_TEXT_MUTED, 2, left_w - 50);
+
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
@@ -2877,7 +3075,28 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         }
     }
 
-    if (s_osd_status[0]) {
+    if (s_osd_toast_frames > 0) {
+        s_osd_toast_frames--;
+        bool blink_on = ((s_osd_toast_frames / 8) % 2) == 0;
+        uint32_t border_col = s_osd_toast_is_error
+            ? (blink_on ? COLOR_TEXT_RED : COLOR_TEXT_GOLD)
+            : (blink_on ? COLOR_TEXT_GREEN : COLOR_BORDER_CYAN);
+        uint32_t text_col = s_osd_toast_is_error
+            ? (blink_on ? COLOR_TEXT_RED : COLOR_TEXT_WHITE)
+            : (blink_on ? COLOR_TEXT_GREEN : COLOR_TEXT_GOLD);
+        int toast_x = box_x + 40;
+        int toast_y = box_y + box_h - 92;
+        int toast_w = box_w - 80;
+        int toast_h = 40;
+        draw_rect_solid(fb, toast_x, toast_y, toast_w, toast_h, 0xF008101CU);
+        draw_rect_border(fb, toast_x, toast_y, toast_w, toast_h, 2, border_col);
+        int t_len = (int)strlen(s_osd_status);
+        int t_x = toast_x + (toast_w - (t_len * 16)) / 2;
+        if (t_x < toast_x + 12) {
+            t_x = toast_x + 12;
+        }
+        ui_draw_text_truncated(fb, t_x, toast_y + 12, s_osd_status, text_col, 2, toast_w - 24);
+    } else if (s_osd_status[0]) {
         ui_draw_text_truncated(fb, box_x + 40, box_y + box_h - 76, s_osd_status, COLOR_TEXT_GREEN, 2, box_w - 80);
     }
 
@@ -2891,7 +3110,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
                                COLOR_TEXT_MUTED, 2, box_w - 80);
     } else {
         ui_draw_text_truncated(fb, box_x + 40, box_y + box_h - 40,
-                               "[D-PAD] Navegar   [X] Confirmar   [O / OPTIONS] Voltar ao Jogo   [TOUCHPAD] Ajuda/Detalhes",
+                               "[D-PAD] Navegar / Trocar Slot   [X] Confirmar   [O / OPTIONS] Voltar ao Jogo   [TOUCHPAD] Ajuda/Detalhes",
                                COLOR_TEXT_MUTED, 2, box_w - 80);
     }
 }
@@ -2905,22 +3124,17 @@ void ui_menu_render_fps_overlay(uint32_t* fb, int fps) {
         return;
     }
 
-    int badge_x = 24;
-    int badge_y = 14;
-    int badge_w = 156;
-    int badge_h = 34;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "FPS: %d", fps);
 
-    uint32_t color = COLOR_TEXT_GREEN;
-    if (fps < 35) {
-        color = COLOR_TEXT_RED;
-    } else if (fps < 55) {
-        color = COLOR_TEXT_GOLD;
-    }
+    int x = 16;
+    int y = 12;
+    int w = 136;
+    int h = 32;
 
-    draw_rect_solid(fb, badge_x, badge_y, badge_w, badge_h, COLOR_BG);
-    draw_rect_border(fb, badge_x, badge_y, badge_w, badge_h, 2, color);
+    draw_rect_solid(fb, x, y, w, h, 0xCC0A111EU);
+    draw_rect_border(fb, x, y, w, h, 1, COLOR_BORDER_CYAN);
 
-    char fps_text[32];
-    snprintf(fps_text, sizeof(fps_text), "FPS: %2d", fps);
-    ui_draw_text(fb, badge_x + 18, badge_y + 9, fps_text, color, 2);
+    uint32_t col = (fps >= 55) ? COLOR_TEXT_GREEN : (fps >= 40 ? COLOR_TEXT_GOLD : COLOR_TEXT_RED);
+    ui_draw_text(fb, x + 12, y + 8, buf, col, 2);
 }
