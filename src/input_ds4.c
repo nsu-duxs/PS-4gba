@@ -247,4 +247,5 @@ void input_shutdown(void) {
         }
         s_user_ids[i] = -1;
     }
+    sceUserServiceTerminate();
 }

@@ -4,9 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <signal.h>
 #include <time.h>
 #include <wchar.h>
 #include <orbis/libkernel.h>
+#include <orbis/SystemService.h>
 #include "emulator_manager.h"
 #include "video_split.h"
 #include "input_ds4.h"
@@ -112,6 +114,9 @@ static OrbisHeapBlock* s_heap_head = NULL;
 static OrbisHeapBlock* s_heap_rover = NULL;
 static uintptr_t s_heap_start = 0;
 static uintptr_t s_heap_end = 0;
+static off_t s_heap_phys_addr = 0;
+static size_t s_heap_pool_size = 0;
+static bool s_heap_terminated = false;
 static volatile unsigned char s_heap_lock = 0;
 
 static inline void heap_lock(void) {
@@ -127,6 +132,9 @@ static inline void heap_unlock(void) {
 }
 
 static bool heap_ensure_initialized(void) {
+    if (s_heap_terminated) {
+        return false;
+    }
     if (s_heap_head) {
         return true;
     }
@@ -148,6 +156,8 @@ static bool heap_ensure_initialized(void) {
         if (sceKernelAllocateDirectMemory(0, (off_t)dmem_total, pool_size, 16384, 0, &phys_addr) == 0) {
             void* mapped = NULL;
             if (sceKernelMapDirectMemory(&mapped, pool_size, 0x03, 0, phys_addr, 16384) == 0 && mapped) {
+                s_heap_phys_addr = phys_addr;
+                s_heap_pool_size = pool_size;
                 s_heap_start = (uintptr_t)mapped;
                 s_heap_end = s_heap_start + pool_size;
                 s_heap_head = (OrbisHeapBlock*)mapped;
@@ -164,6 +174,29 @@ static bool heap_ensure_initialized(void) {
     }
 
     return false;
+}
+
+static void heap_shutdown(void) {
+    heap_lock();
+    s_heap_terminated = true;
+    void* mapped = (void*)s_heap_start;
+    size_t pool_size = s_heap_pool_size;
+    off_t phys_addr = s_heap_phys_addr;
+
+    s_heap_head = NULL;
+    s_heap_rover = NULL;
+    s_heap_start = 0;
+    s_heap_end = 0;
+    s_heap_phys_addr = 0;
+    s_heap_pool_size = 0;
+    heap_unlock();
+
+    if (mapped && pool_size > 0) {
+        sceKernelMunmap(mapped, pool_size);
+    }
+    if (phys_addr != 0 && pool_size > 0) {
+        sceKernelReleaseDirectMemory(phys_addr, pool_size);
+    }
 }
 
 static void* heap_alloc_unlocked(size_t size) {
@@ -344,6 +377,41 @@ void* realloc(void* ptr, size_t size) {
     return new_ptr;
 }
 
+/* ============================================================================
+ * 3. Gestao de Sinais POSIX e Sequencia Deterministica de Teardown
+ * ============================================================================ */
+static volatile sig_atomic_t s_quit_requested = 0;
+static volatile unsigned char s_teardown_executed = 0;
+
+static void posix_signal_handler(int sig) {
+    (void)sig;
+    s_quit_requested = 1;
+}
+
+static void app_teardown_sequence(void) {
+    if (__atomic_test_and_set(&s_teardown_executed, __ATOMIC_ACQ_REL)) {
+        return;
+    }
+
+    /* 1. Encerra threads de emulacao (Cores 1..3), persiste SRAM em disco e libera instancias mGBA */
+    emulator_destroy_all();
+
+    /* 2. Sinaliza e aguarda thread de audio de baixa latencia (Core 4) e fecha porta SceAudioOut */
+    audio_shutdown();
+
+    /* 3. Restaura lightbar, fecha descritores Bluetooth HID (scePad) e encerra SceUserService */
+    input_shutdown();
+
+    /* 4. Aguarda ultimo VSync flip (DCE), desregistra buffers, fecha SceVideoOut e libera Direct Memory de video */
+    video_shutdown();
+
+    /* 5. Desmonta nullfs USB do sandbox e restaura credenciais/vnodes originais do kernel FreeBSD */
+    ps4_unjailbreak_system();
+
+    /* 6. Desmapeia e libera o pool de Direct Memory do heap customizado */
+    heap_shutdown();
+}
+
 int main(int argc, char* argv[]) {
     /* Fixa a thread principal (Player 0) exclusivamente no Nucleo 0 do Cluster 0 Jaguar */
     typedef OrbisPthread (*ScePthreadSelfFn)(void);
@@ -353,7 +421,14 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
+    signal(SIGINT, posix_signal_handler);
+    signal(SIGTERM, posix_signal_handler);
+    signal(SIGQUIT, posix_signal_handler);
+    signal(SIGHUP, posix_signal_handler);
+    atexit(app_teardown_sequence);
+
     if (!video_init()) {
+        app_teardown_sequence();
         return -1;
     }
 
@@ -361,9 +436,12 @@ int main(int argc, char* argv[]) {
     audio_init();
     ui_menu_init(); /* Inicia no estado animado UI_STATE_SPLASH */
 
-    bool running = true;
-    while (running) {
+    while (!s_quit_requested && !ui_menu_should_quit()) {
         input_poll_all(&g_gba_ctx);
+
+        if (s_quit_requested || ui_menu_should_quit()) {
+            break;
+        }
 
         /* Emula apenas durante o jogo ativo; Splash e Menus renderizam independentes a 60 FPS */
         if (ui_menu_get_state() == UI_STATE_INGAME) {
@@ -374,10 +452,8 @@ int main(int argc, char* argv[]) {
         video_render_split_screen(&g_gba_ctx);
     }
 
-    emulator_destroy_all();
-    audio_shutdown();
-    input_shutdown();
-    video_shutdown();
+    app_teardown_sequence();
+    sceSystemServiceLoadExec("exit", NULL);
 
     return 0;
 }

@@ -63,6 +63,7 @@ enum {
     LAUNCHER_VA_FPS_LIMIT,
     LAUNCHER_VA_AUDIO_MODE,
     LAUNCHER_VA_MENU_SFX,
+    LAUNCHER_VA_EXIT_APP,
     LAUNCHER_VA_COUNT
 };
 
@@ -74,6 +75,7 @@ enum {
     OSD_SAVE_ACTION_SAVE,
     OSD_SAVE_ACTION_LOAD,
     OSD_SAVE_RETURN_LAUNCHER,
+    OSD_SAVE_EXIT_APP,
     OSD_SAVE_COUNT
 };
 
@@ -106,6 +108,7 @@ static int s_osd_cheat_cursor = 0;
 static int s_osd_cheat_scroll = 0;
 
 static UIAppState s_app_state = UI_STATE_SPLASH;
+static volatile bool s_should_quit = false;
 static int s_splash_frame = 0;
 static bool s_show_fps = true;
 static int s_join_hint_frames = 0;
@@ -1137,6 +1140,7 @@ void ui_menu_init(void) {
     s_osd_player = 0;
     s_osd_status[0] = '\0';
     s_join_hint_frames = 0;
+    s_should_quit = false;
 }
 
 UIAppState ui_menu_get_state(void) {
@@ -1145,6 +1149,14 @@ UIAppState ui_menu_get_state(void) {
 
 void ui_menu_set_state(UIAppState state) {
     s_app_state = state;
+}
+
+bool ui_menu_should_quit(void) {
+    return s_should_quit;
+}
+
+void ui_menu_request_quit(void) {
+    s_should_quit = true;
 }
 
 void ui_menu_open_osd(int trigger_player) {
@@ -1553,8 +1565,8 @@ void ui_menu_render_splash(uint32_t* fb) {
             ui_draw_text(fb, cx - 80, banner_y + 16, "PS", COLOR_PS_NEON_BLUE, 4);
             ui_draw_text(fb, cx - 16, banner_y + 16, "gba", COLOR_TEXT_GOLD, 4);
 
-            /* Subtitulo em Amarelo Dourado com Versao v1.0.9 */
-            ui_draw_text(fb, cx - 272, banner_y + 64, "4-WAY SPLIT-SCREEN EMULATOR v1.0.9", COLOR_TEXT_GOLD, 2);
+            /* Subtitulo em Amarelo Dourado com Versao v00.10 */
+            ui_draw_text(fb, cx - 272, banner_y + 64, "4-WAY SPLIT-SCREEN EMULATOR v00.10", COLOR_TEXT_GOLD, 2);
         }
     }
 
@@ -1905,6 +1917,11 @@ void ui_menu_update_launcher(struct PS4GBA_Context* ctx, uint32_t buttons_presse
             case LAUNCHER_VA_MENU_SFX:
                 audio_set_menu_sfx_enabled(!audio_is_menu_sfx_enabled());
                 break;
+            case LAUNCHER_VA_EXIT_APP:
+                if (buttons_pressed & ORBIS_PAD_BUTTON_CROSS) {
+                    s_should_quit = true;
+                }
+                break;
             default:
                 break;
             }
@@ -2083,6 +2100,9 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 emulator_destroy_all();
                 ui_menu_scan_roms();
                 s_app_state = UI_STATE_LAUNCHER;
+                break;
+            case OSD_SAVE_EXIT_APP:
+                s_should_quit = true;
                 break;
             default:
                 break;
@@ -2276,7 +2296,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
     draw_rect_border(fb, 40, 24, PS4_SCREEN_WIDTH - 80, PS4_SCREEN_HEIGHT - 48, 3, COLOR_BORDER_CYAN);
     draw_rect_border(fb, 46, 30, PS4_SCREEN_WIDTH - 92, PS4_SCREEN_HEIGHT - 60, 1, COLOR_BORDER_INNER);
 
-    ui_draw_text(fb, 70, 44, "PSgba - GBA 4-WAY SPLIT-SCREEN EMULATOR v1.0.9", COLOR_TEXT_GOLD, 3);
+    ui_draw_text(fb, 70, 44, "PSgba - GBA 4-WAY SPLIT-SCREEN EMULATOR v00.10", COLOR_TEXT_GOLD, 3);
 
     const char* tabs[LAUNCHER_TAB_COUNT] = {
         "[ JOGOS ]",
@@ -2407,21 +2427,23 @@ void ui_menu_render_launcher(uint32_t* fb) {
                  audio_is_menu_sfx_enabled() ? "LIGADO" : "DESLIGADO");
 
         const char* opts[LAUNCHER_VA_COUNT] = {
-            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_audio, opt_sfx
+            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_audio, opt_sfx,
+            "Sair do Emulador (Encerrar Aplicativo)"
         };
 
         for (int i = 0; i < LAUNCHER_VA_COUNT; ++i) {
             bool is_sel = (s_launcher_va_cursor == i);
-            int row_y = left_y + 104 + i * 64;
+            int row_y = left_y + 98 + i * 58;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 50, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 50, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 46, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 46, 1, COLOR_BORDER_CYAN);
             }
 
             char line[200];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", opts[i]);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 10, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, left_w - 60);
+            uint32_t item_col = is_sel ? COLOR_TEXT_GOLD : ((i == LAUNCHER_VA_EXIT_APP) ? COLOR_TEXT_RED : COLOR_TEXT_LIGHT);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 8, line, item_col, 2, left_w - 60);
         }
 
         ui_draw_text_truncated(fb, left_x + 30, left_y + 710,
@@ -2490,6 +2512,12 @@ void ui_menu_render_launcher(uint32_t* fb) {
                                      "Ativa ou desativa os efeitos sonoros ao navegar pelas abas e opcoes dos menus. O audio do jogo em execucao continua funcionando normalmente.",
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
+            case LAUNCHER_VA_EXIT_APP:
+                ui_draw_text(fb, side_x + 24, ty, "SAIR DO EMULADOR:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text_wrapped(fb, side_x + 24, ty,
+                                     "Encerra a aplicacao de forma segura, sincronizando saves em disco, liberando controles Bluetooth e restaurando o estado original do kernel.",
+                                     COLOR_TEXT_WHITE, 2, side_w - 48, 24);
+                break;
             default:
                 break;
             }
@@ -2543,9 +2571,9 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
     draw_rect_border(fb, box_x, box_y, box_w, box_h, 3, COLOR_BORDER_CYAN);
     draw_rect_border(fb, box_x + 6, box_y + 6, box_w - 12, box_h - 12, 1, COLOR_BORDER_INNER);
 
-    /* Linha superior: Titulo formatado com versao v1.0.9 */
+    /* Linha superior: Titulo formatado com versao v00.10 */
     char title[160];
-    snprintf(title, sizeof(title), "MENU v1.0.9 - CONTROLE P%d (%s)",
+    snprintf(title, sizeof(title), "MENU v00.10 - CONTROLE P%d (%s)",
              s_osd_player + 1, ctx ? ctx->rom_name : "");
     ui_draw_text_truncated(fb, box_x + 36, box_y + 24, title, COLOR_TEXT_GOLD, 3, 1280);
 
@@ -2792,21 +2820,23 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
             item_slot,
             item_save,
             item_load,
-            "Voltar ao Launcher (Fechar ROM)"
+            "Voltar ao Launcher (Fechar ROM)",
+            "Sair do Emulador (Encerrar Aplicativo)"
         };
 
         for (int i = 0; i < OSD_SAVE_COUNT; ++i) {
             bool is_sel = (s_osd_saves_cursor == i);
-            int row_y = left_y + 82 + i * 82;
+            int row_y = left_y + 76 + i * 74;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 8, saves_left_w - 40, 56, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 8, saves_left_w - 40, 56, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 6, saves_left_w - 40, 50, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 6, saves_left_w - 40, 50, 1, COLOR_BORDER_CYAN);
             }
 
             char line[180];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", save_items[i]);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 12, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, saves_left_w - 50);
+            uint32_t item_col = is_sel ? COLOR_TEXT_GOLD : ((i == OSD_SAVE_EXIT_APP) ? COLOR_TEXT_RED : COLOR_TEXT_LIGHT);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 11, line, item_col, 2, saves_left_w - 50);
         }
 
         /* Painel Lateral Direito Sempre Visivel: Preview Visual do Save State + Data/Hora */

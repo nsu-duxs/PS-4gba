@@ -63,7 +63,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/mgba_gen/mgba/core/version.h" "
 #define GIT_REV 1
 #define BINARY_NAME \"mgba-ps4\"
 #define PROJECT_NAME \"mGBA PS4 4P\"
-#define PROJECT_VERSION \"1.0.9\"
+#define PROJECT_VERSION \"00.10\"
 #endif
 ")
 
@@ -159,7 +159,7 @@ target_compile_definitions(mgba_core PUBLIC
     HAVE_LOCALTIME_R
     binaryName="mgba-ps4"
     projectName="mGBA PS4 4P"
-    projectVersion="1.0.9"
+    projectVersion="00.10"
     gitCommit="ps4-split"
     gitCommitShort="ps4"
     gitBranch="main"

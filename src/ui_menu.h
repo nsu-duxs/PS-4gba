@@ -37,6 +37,8 @@ typedef enum OsdTab {
 
 void ui_menu_init(void);
 void ui_menu_scan_roms(void);
+bool ui_menu_should_quit(void);
+void ui_menu_request_quit(void);
 
 UIAppState ui_menu_get_state(void);
 void ui_menu_set_state(UIAppState state);

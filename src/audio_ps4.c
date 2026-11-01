@@ -525,8 +525,11 @@ static void* audio_output_thread_main(void* arg) {
             }
         }
 
-        if (s_audio_handle >= 0) {
-            sceAudioOutOutput(s_audio_handle, out_ptr);
+        int32_t handle = __atomic_load_n(&s_audio_handle, __ATOMIC_ACQUIRE);
+        if (handle >= 0 && __atomic_load_n(&s_audio_thread_running, __ATOMIC_ACQUIRE)) {
+            if (sceAudioOutOutput(handle, out_ptr) < 0) {
+                sceKernelUsleep(2000);
+            }
         }
         s_out_flip ^= 1;
     }
@@ -776,15 +779,15 @@ void audio_process(struct PS4GBA_Context* ctx) {
 
 void audio_shutdown(void) {
     audio_stop_splash_sfx();
+    __atomic_store_n(&s_audio_thread_running, 0, __ATOMIC_RELEASE);
+    int32_t handle = __atomic_exchange_n(&s_audio_handle, -1, __ATOMIC_ACQ_REL);
     if (s_audio_thread_created) {
-        __atomic_store_n(&s_audio_thread_running, 0, __ATOMIC_RELEASE);
         scePthreadJoin(s_audio_thread, NULL);
         s_audio_thread_created = false;
     }
-    if (s_audio_handle >= 0) {
-        sceAudioOutOutput(s_audio_handle, NULL);
-        sceAudioOutClose(s_audio_handle);
-        s_audio_handle = -1;
+    if (handle >= 0) {
+        sceAudioOutOutput(handle, NULL);
+        sceAudioOutClose(handle);
     }
     s_ring_write = 0;
     s_ring_read = 0;

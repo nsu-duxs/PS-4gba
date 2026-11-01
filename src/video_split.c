@@ -817,19 +817,27 @@ void video_render_split_screen(struct PS4GBA_Context* ctx) {
 }
 
 void video_shutdown(void) {
+    if (s_video_handle >= 0) {
+        if (s_submitted_flip_arg > 0) {
+            wait_for_flip(s_submitted_flip_arg);
+            s_submitted_flip_arg = 0;
+        }
+        sceVideoOutUnregisterBuffers(s_video_handle, 0);
+        sceVideoOutClose(s_video_handle);
+        s_video_handle = -1;
+    }
     if (s_flip_queue) {
         sceKernelDeleteEqueue(s_flip_queue);
         s_flip_queue = 0;
     }
-    if (s_video_handle >= 0) {
-        sceVideoOutClose(s_video_handle);
-        s_video_handle = -1;
-    }
-    if (s_framebuffers[0]) {
-        sceKernelReleaseDirectMemory(s_direct_mem_offset, s_total_alloc_size);
+    if (s_framebuffers[0] && s_total_alloc_size > 0) {
+        sceKernelMunmap(s_framebuffers[0], s_total_alloc_size);
         for (int i = 0; i < NUM_FRAMEBUFFERS; ++i) {
             s_framebuffers[i] = NULL;
         }
+    }
+    if (s_direct_mem_offset != 0 && s_total_alloc_size > 0) {
+        sceKernelReleaseDirectMemory(s_direct_mem_offset, s_total_alloc_size);
         s_direct_mem_offset = 0;
         s_total_alloc_size = 0;
     }
