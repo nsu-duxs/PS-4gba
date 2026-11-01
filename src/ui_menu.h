@@ -60,5 +60,8 @@ void ui_menu_render_disclaimer(uint32_t* fb);
 void ui_menu_render_launcher(uint32_t* fb);
 void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx);
 void ui_menu_render_fps_overlay(uint32_t* fb, int fps);
+void ui_menu_render_fast_forward_hud(uint32_t* fb);
+void ui_menu_render_ingame_toast(uint32_t* fb);
+void ui_menu_show_toast(const char* msg, bool is_error);
 
 #endif /* UI_MENU_H */

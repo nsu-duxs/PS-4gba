@@ -793,6 +793,8 @@ void video_render_split_screen(struct PS4GBA_Context* ctx) {
     }
 
     if (ui_state == UI_STATE_INGAME && !osd_open) {
+        ui_menu_render_fast_forward_hud(back_buffer);
+        ui_menu_render_ingame_toast(back_buffer);
         ui_menu_render_join_hint(back_buffer, ctx);
     }
 

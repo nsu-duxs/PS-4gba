@@ -5,6 +5,7 @@
 #include <orbis/AudioOut.h>
 #include <orbis/UserService.h>
 #include <mgba-util/audio-buffer.h>
+#include "emulator_manager.h" 
 
 #define MAX_RESAMPLED_FRAME   2048
 #define RING_CAPACITY_FRAMES  8192U
@@ -24,6 +25,7 @@
 #define SFX_VALUE_CHANGE_SAMPLES 1920U /* 0.04s: Alterar Valor D-Pad ~440Hz */
 #define SFX_CONFIRM_ACT_SAMPLES  4320U /* 0.09s: Confirmar Cruz/X 880Hz -> 1320Hz */
 #define SFX_TOUCHPAD_SAMPLES     3840U /* 0.08s: Touchpad holografico 1200Hz -> 800Hz */
+#define SFX_ERROR_SAMPLES        5760U /* 0.12s: Tom duplo de erro ~160Hz */
 
 typedef struct SFXBuffer {
     int16_t* samples;
@@ -43,6 +45,7 @@ static int16_t s_sfx_tab_switch_buf[SFX_TAB_SWITCH_SAMPLES * 2] __attribute__((a
 static int16_t s_sfx_value_change_buf[SFX_VALUE_CHANGE_SAMPLES * 2] __attribute__((aligned(64)));
 static int16_t s_sfx_confirm_act_buf[SFX_CONFIRM_ACT_SAMPLES * 2] __attribute__((aligned(64)));
 static int16_t s_sfx_touchpad_buf[SFX_TOUCHPAD_SAMPLES * 2] __attribute__((aligned(64)));
+static int16_t s_sfx_error_buf[SFX_ERROR_SAMPLES * 2] __attribute__((aligned(64)));
 
 static SFXBuffer s_sfx_buffers[UI_SFX_COUNT];
 static SFXVoice s_sfx_voices[UI_SFX_COUNT];
@@ -374,6 +377,25 @@ static void sfx_synth_touchpad(int16_t* dst, uint32_t count) {
     }
 }
 
+/*
+ * Sintese 9: Som de Erro / Acao Bloqueada (UI_SFX_ERROR)
+ * Tom duplo grave eletronico 180Hz -> 140Hz em 120ms.
+ */
+static void sfx_synth_error(int16_t* dst, uint32_t count) {
+    float phase = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        float tau = (float)i / (float)count;
+        float freq = (tau < 0.5f) ? 180.0f : 140.0f;
+        phase += (2.0f * PI_F * freq) / 48000.0f;
+        float wave = 0.60f * sinf(phase) + 0.30f * sinf(3.0f * phase);
+        float att = (i < 48) ? ((float)i / 48.0f) : 1.0f;
+        float dec = 1.0f - tau;
+        float amp = 14000.0f * att * dec;
+        dst[i * 2 + 0] = clamp_s16((int32_t)(amp * wave));
+        dst[i * 2 + 1] = clamp_s16((int32_t)(amp * wave));
+    }
+}
+
 static void sfx_synthesize_all(void) {
     s_sfx_buffers[UI_SFX_SPLASH_IMPACT].samples = s_sfx_impact_buf;
     s_sfx_buffers[UI_SFX_SPLASH_IMPACT].num_frames = SFX_IMPACT_SAMPLES;
@@ -406,6 +428,10 @@ static void sfx_synthesize_all(void) {
     s_sfx_buffers[UI_SFX_TOUCHPAD].samples = s_sfx_touchpad_buf;
     s_sfx_buffers[UI_SFX_TOUCHPAD].num_frames = SFX_TOUCHPAD_SAMPLES;
     sfx_synth_touchpad(s_sfx_touchpad_buf, SFX_TOUCHPAD_SAMPLES);
+
+    s_sfx_buffers[UI_SFX_ERROR].samples = s_sfx_error_buf;
+    s_sfx_buffers[UI_SFX_ERROR].num_frames = SFX_ERROR_SAMPLES;
+    sfx_synth_error(s_sfx_error_buf, SFX_ERROR_SAMPLES);
 }
 
 void audio_set_menu_sfx_enabled(bool enabled) {
@@ -684,6 +710,28 @@ static inline size_t compute_target_48k_frames(void) {
     return (size_t)(800 + adj);
 }
 
+static inline size_t decimate_audio_frames(int16_t* buf, size_t frames, EmulatorSpeed speed) {
+    if (speed == EMULATOR_SPEED_2X) {
+        size_t out_frames = frames / 2;
+        for (size_t k = 0; k < out_frames; ++k) {
+            buf[k * 2 + 0] = buf[(k * 2) * 2 + 0];
+            buf[k * 2 + 1] = buf[(k * 2) * 2 + 1];
+        }
+        return out_frames;
+    } else if (speed == EMULATOR_SPEED_1_5X) {
+        size_t out_frames = 0;
+        for (size_t k = 0; k < frames; ++k) {
+            if ((k % 3) != 2) {
+                buf[out_frames * 2 + 0] = buf[k * 2 + 0];
+                buf[out_frames * 2 + 1] = buf[k * 2 + 1];
+                out_frames++;
+            }
+        }
+        return out_frames;
+    }
+    return frames;
+}
+
 void audio_process(struct PS4GBA_Context* ctx) {
     if (!ctx || s_audio_handle < 0) {
         return;
@@ -719,6 +767,10 @@ void audio_process(struct PS4GBA_Context* ctx) {
             }
             if (avail > 0) {
                 size_t read_frames = mAudioBufferRead(abuf, s_raw_buf, avail);
+                read_frames = decimate_audio_frames(s_raw_buf, read_frames, emulator_get_speed());
+                if (mAudioBufferAvailable(abuf) > 4096) {
+                    mAudioBufferClear(abuf);
+                }
                 size_t resampled = resample_stereo_linear(
                     i, s_raw_buf, read_frames, target_frames,
                     s_inst_resampled[0], MAX_RESAMPLED_FRAME
@@ -747,6 +799,10 @@ void audio_process(struct PS4GBA_Context* ctx) {
             }
             if (avail > 0) {
                 size_t read_frames = mAudioBufferRead(abuf, s_raw_buf, avail);
+                read_frames = decimate_audio_frames(s_raw_buf, read_frames, emulator_get_speed());
+                if (mAudioBufferAvailable(abuf) > 4096) {
+                    mAudioBufferClear(abuf);
+                }
                 s_inst_frames[i] = resample_stereo_linear(
                     i, s_raw_buf, read_frames, target_frames,
                     s_inst_resampled[i], MAX_RESAMPLED_FRAME

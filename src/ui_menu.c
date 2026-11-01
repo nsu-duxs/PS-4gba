@@ -7,6 +7,7 @@
 #include "link_cable_hub.h"
 #include "ps4_jailbreak.h"
 #include "i18n.h"
+#include "emulator_manager.h" 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +65,7 @@ enum {
     LAUNCHER_VA_SMOOTH,
     LAUNCHER_VA_SHOW_FPS,
     LAUNCHER_VA_FPS_LIMIT,
+    LAUNCHER_VA_FAST_FORWARD,
     LAUNCHER_VA_AUDIO_MODE,
     LAUNCHER_VA_MENU_SFX,
     LAUNCHER_VA_LANGUAGE,
@@ -78,6 +80,7 @@ enum {
     OSD_SAVE_SLOT,
     OSD_SAVE_ACTION_SAVE,
     OSD_SAVE_ACTION_LOAD,
+    OSD_SAVE_FAST_FORWARD,
     OSD_SAVE_RETURN_LAUNCHER,
     OSD_SAVE_EXIT_APP,
     OSD_SAVE_COUNT
@@ -2012,6 +2015,15 @@ void ui_menu_update_launcher(struct PS4GBA_Context* ctx, uint32_t buttons_presse
             case LAUNCHER_VA_FPS_LIMIT:
                 video_toggle_fps_limit();
                 break;
+            case LAUNCHER_VA_FAST_FORWARD:
+                if (!emulator_is_fast_forward_allowed()) {
+                    audio_play_sfx(UI_SFX_ERROR);
+                    snprintf(s_launcher_status, sizeof(s_launcher_status), "%s",
+                             i18n_get(STR_TOAST_FF_DISABLED_MP));
+                } else {
+                    emulator_cycle_speed(delta);
+                }
+                break;
             case LAUNCHER_VA_AUDIO_MODE:
                 if (audio_get_mode() == PS4_AUDIO_MODE_MIX) {
                     audio_set_mode(PS4_AUDIO_MODE_FOCUS);
@@ -2118,6 +2130,14 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                     snprintf(msg, sizeof(msg), "%s", i18n_get(STR_TOAST_SAVE_MODE_IND));
                 }
                 ui_trigger_osd_toast(msg, false);
+            } else if (s_osd_saves_cursor == OSD_SAVE_FAST_FORWARD) {
+                if (!emulator_is_fast_forward_allowed()) {
+                    audio_play_sfx(UI_SFX_ERROR);
+                    ui_trigger_osd_toast(i18n_get(STR_TOAST_FF_DISABLED_MP), true);
+                } else {
+                    audio_play_sfx(UI_SFX_VALUE_CHANGE);
+                    emulator_cycle_speed(delta);
+                }
             } else {
                 save_manager_cycle_slot(delta);
                 s_thumb_cache_dirty = true;
@@ -2205,6 +2225,15 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                         snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_SLOT_EMPTY_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, true);
                     }
+                }
+                break;
+            case OSD_SAVE_FAST_FORWARD:
+                if (!emulator_is_fast_forward_allowed()) {
+                    audio_play_sfx(UI_SFX_ERROR);
+                    ui_trigger_osd_toast(i18n_get(STR_TOAST_FF_DISABLED_MP), true);
+                } else {
+                    audio_play_sfx(UI_SFX_CONFIRM);
+                    emulator_cycle_speed(1);
                 }
                 break;
             case OSD_SAVE_RETURN_LAUNCHER:
@@ -2374,12 +2403,22 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
             if (s_osd_link_cursor == OSD_LINK_POWER) {
                 bool next_state = !link_hub_is_cable_enabled();
                 link_hub_set_cable_enabled(next_state);
-                snprintf(s_osd_status, sizeof(s_osd_status), "%s",
-                         next_state ? i18n_get(STR_LINK_TOAST_CONN) : i18n_get(STR_LINK_TOAST_DISC));
+                if (next_state && emulator_get_speed() != EMULATOR_SPEED_1X) {
+                    emulator_set_speed(EMULATOR_SPEED_1X);
+                    ui_trigger_osd_toast(i18n_get(STR_TOAST_FF_RESET_BY_LINK), false);
+                } else {
+                    snprintf(s_osd_status, sizeof(s_osd_status), "%s",
+                             next_state ? i18n_get(STR_LINK_TOAST_CONN) : i18n_get(STR_LINK_TOAST_DISC));
+                }
             } else if (s_osd_link_cursor == OSD_LINK_HOTPLUG && (buttons_pressed & ORBIS_PAD_BUTTON_CROSS)) {
+                if (emulator_get_speed() != EMULATOR_SPEED_1X) {
+                    emulator_set_speed(EMULATOR_SPEED_1X);
+                    ui_trigger_osd_toast(i18n_get(STR_TOAST_FF_RESET_BY_LINK), false);
+                } else {
+                    snprintf(s_osd_status, sizeof(s_osd_status), "%s",
+                             i18n_get(STR_LINK_TOAST_HOTPLUG));
+                }
                 link_hub_trigger_hotplug();
-                snprintf(s_osd_status, sizeof(s_osd_status), "%s",
-                         i18n_get(STR_LINK_TOAST_HOTPLUG));
                 s_app_state = UI_STATE_INGAME;
             } else if (s_osd_link_cursor == OSD_LINK_DEV_TELEMETRY) {
                 s_show_dev_telemetry = !s_show_dev_telemetry;
@@ -2519,7 +2558,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
         draw_rect_solid(fb, left_x + 20, left_y + 86, left_w - 40, 1, COLOR_BORDER_INNER);
 
         char opt_display[160], opt_filter[160], opt_scale[160], opt_smooth[160];
-        char opt_fps[160], opt_fps_limit[160], opt_audio[160], opt_sfx[160], opt_lang[160];
+        char opt_fps[160], opt_fps_limit[160], opt_ff[160], opt_audio[160], opt_sfx[160], opt_lang[160];
 
         snprintf(opt_display, sizeof(opt_display), i18n_get(STR_SETTING_VIDEO_MODE),
                  video_get_display_mode_name(video_get_display_mode()));
@@ -2534,6 +2573,21 @@ void ui_menu_render_launcher(uint32_t* fb) {
         snprintf(opt_fps_limit, sizeof(opt_fps_limit), i18n_get(STR_SETTING_FPS_LIMIT),
                  video_get_fps_limit_name(video_get_fps_limit()));
 
+        const char* launcher_ff_val = NULL;
+        if (!emulator_is_fast_forward_allowed()) {
+            launcher_ff_val = i18n_get(STR_FF_LOCKED_MP);
+        } else {
+            EmulatorSpeed spd = emulator_get_speed();
+            if (spd == EMULATOR_SPEED_2X) {
+                launcher_ff_val = i18n_get(STR_FF_SPEED_2X);
+            } else if (spd == EMULATOR_SPEED_1_5X) {
+                launcher_ff_val = i18n_get(STR_FF_SPEED_1_5X);
+            } else {
+                launcher_ff_val = i18n_get(STR_FF_SPEED_1X);
+            }
+        }
+        snprintf(opt_ff, sizeof(opt_ff), i18n_get(STR_SETTING_FAST_FORWARD), launcher_ff_val);
+
         const char* audio_name = (audio_get_mode() == PS4_AUDIO_MODE_MIX)
                                      ? i18n_get(STR_AUDIO_MIX_ALL)
                                      : i18n_get(STR_AUDIO_FOCUS_P1);
@@ -2543,26 +2597,26 @@ void ui_menu_render_launcher(uint32_t* fb) {
         snprintf(opt_lang, sizeof(opt_lang), "%s", i18n_get(STR_SETTING_LANGUAGE));
 
         const char* opts[LAUNCHER_VA_COUNT] = {
-            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_audio, opt_sfx, opt_lang,
+            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_ff, opt_audio, opt_sfx, opt_lang,
             i18n_get(STR_MENU_EXIT)
         };
 
         for (int i = 0; i < LAUNCHER_VA_COUNT; ++i) {
             bool is_sel = (s_launcher_va_cursor == i);
-            int row_y = left_y + 96 + i * 56;
+            int row_y = left_y + 96 + i * 50;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 44, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 44, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 4, left_w - 40, 42, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 4, left_w - 40, 42, 1, COLOR_BORDER_CYAN);
             }
 
             char line[200];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", opts[i]);
             uint32_t item_col = is_sel ? COLOR_TEXT_GOLD : ((i == LAUNCHER_VA_EXIT_APP) ? COLOR_TEXT_RED : COLOR_TEXT_LIGHT);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 8, line, item_col, 2, left_w - 60);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 7, line, item_col, 2, left_w - 60);
         }
 
-        ui_draw_text_truncated(fb, left_x + 30, left_y + 710,
+        ui_draw_text_truncated(fb, left_x + 30, left_y + 672,
                                i18n_get(STR_LAUNCHER_VA_HINT),
                                COLOR_TEXT_MUTED, 2, left_w - 60);
 
@@ -2608,6 +2662,12 @@ void ui_menu_render_launcher(uint32_t* fb) {
                 ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_FPS_LIM_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
                                      i18n_get(STR_INFO_FPS_LIM_DESC_L),
+                                     COLOR_TEXT_WHITE, 2, side_w - 48, 24);
+                break;
+            case LAUNCHER_VA_FAST_FORWARD:
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_FF_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text_wrapped(fb, side_x + 24, ty,
+                                     i18n_get(STR_INFO_FF_DESC),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_AUDIO_MODE:
@@ -2913,7 +2973,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         int cur_slot = save_manager_get_slot();
         bool is_grp_mode = (save_manager_get_mode() == SAVE_MODE_GROUP);
 
-        char item_type[160], item_slot[160], item_save[128], item_load[128];
+        char item_type[160], item_slot[160], item_save[128], item_load[128], item_ff[160];
         if (is_grp_mode) {
             snprintf(item_type, sizeof(item_type), "%s", i18n_get(STR_SAVE_TYPE_GRP));
         } else {
@@ -2928,29 +2988,45 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         snprintf(item_save, sizeof(item_save), "%s", i18n_get(STR_SAVE_ACTION_SAVE));
         snprintf(item_load, sizeof(item_load), "%s", i18n_get(STR_SAVE_ACTION_LOAD));
 
+        const char* osd_ff_val = NULL;
+        if (!emulator_is_fast_forward_allowed()) {
+            osd_ff_val = i18n_get(STR_FF_LOCKED_MP);
+        } else {
+            EmulatorSpeed spd = emulator_get_speed();
+            if (spd == EMULATOR_SPEED_2X) {
+                osd_ff_val = i18n_get(STR_FF_SPEED_2X);
+            } else if (spd == EMULATOR_SPEED_1_5X) {
+                osd_ff_val = i18n_get(STR_FF_SPEED_1_5X);
+            } else {
+                osd_ff_val = i18n_get(STR_FF_SPEED_1X);
+            }
+        }
+        snprintf(item_ff, sizeof(item_ff), i18n_get(STR_SETTING_FAST_FORWARD), osd_ff_val);
+
         const char* save_items[OSD_SAVE_COUNT] = {
             i18n_get(STR_MENU_RESUME),
             item_type,
             item_slot,
             item_save,
             item_load,
+            item_ff,
             i18n_get(STR_MENU_RESET),
             i18n_get(STR_MENU_EXIT)
         };
 
         for (int i = 0; i < OSD_SAVE_COUNT; ++i) {
             bool is_sel = (s_osd_saves_cursor == i);
-            int row_y = left_y + 76 + i * 74;
+            int row_y = left_y + 70 + i * 66;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, saves_left_w - 40, 50, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, saves_left_w - 40, 50, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 5, saves_left_w - 40, 48, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 5, saves_left_w - 40, 48, 1, COLOR_BORDER_CYAN);
             }
 
             char line[180];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", save_items[i]);
             uint32_t item_col = is_sel ? COLOR_TEXT_GOLD : ((i == OSD_SAVE_EXIT_APP) ? COLOR_TEXT_RED : COLOR_TEXT_LIGHT);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 11, line, item_col, 2, saves_left_w - 50);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 10, line, item_col, 2, saves_left_w - 50);
         }
 
         /* Painel Lateral Direito Sempre Visivel: Preview Visual do Save State + Data/Hora */
@@ -3285,4 +3361,58 @@ void ui_menu_render_fps_overlay(uint32_t* fb, int fps) {
 
     uint32_t col = (fps >= 55) ? COLOR_TEXT_GREEN : (fps >= 40 ? COLOR_TEXT_GOLD : COLOR_TEXT_RED);
     ui_draw_text(fb, x + 12, y + 8, buf, col, 2);
+}
+
+void ui_menu_render_fast_forward_hud(uint32_t* fb) {
+    if (!fb) {
+        return;
+    }
+    EmulatorSpeed speed = emulator_get_speed();
+    if (speed == EMULATOR_SPEED_1X) {
+        return;
+    }
+    const char* tag = (speed == EMULATOR_SPEED_2X) ? "[2.0x]" : "[1.5x]";
+    int x = s_show_fps ? 160 : 16;
+    int y = 12;
+    int w = 84;
+    int h = 32;
+
+    draw_rect_solid(fb, x, y, w, h, 0xCC0A111EU);
+    draw_rect_border(fb, x, y, w, h, 1, COLOR_BORDER_CYAN);
+    ui_draw_text(fb, x + 8, y + 8, tag, COLOR_TEXT_GOLD, 2);
+}
+
+void ui_menu_render_ingame_toast(uint32_t* fb) {
+    if (!fb || s_osd_toast_frames <= 0) {
+        return;
+    }
+    s_osd_toast_frames--;
+    bool blink_on = ((s_osd_toast_frames / 8) % 2) == 0;
+    uint32_t border_col = s_osd_toast_is_error
+                              ? (blink_on ? COLOR_TEXT_RED : COLOR_TEXT_GOLD)
+                              : (blink_on ? COLOR_TEXT_GREEN : COLOR_BORDER_CYAN);
+    uint32_t text_col = s_osd_toast_is_error
+                            ? (blink_on ? COLOR_TEXT_RED : COLOR_TEXT_WHITE)
+                            : (blink_on ? COLOR_TEXT_GREEN : COLOR_TEXT_GOLD);
+
+    int t_len = (int)strlen(s_osd_status);
+    int toast_w = t_len * 16 + 48;
+    if (toast_w < 360) toast_w = 360;
+    if (toast_w > 1200) toast_w = 1200;
+    int toast_h = 44;
+    int toast_x = (1920 - toast_w) / 2;
+    int toast_y = 960;
+
+    draw_rect_solid(fb, toast_x, toast_y, toast_w, toast_h, 0xF008101CU);
+    draw_rect_border(fb, toast_x, toast_y, toast_w, toast_h, 2, border_col);
+
+    int t_x = toast_x + (toast_w - (t_len * 16)) / 2;
+    if (t_x < toast_x + 12) {
+        t_x = toast_x + 12;
+    }
+    ui_draw_text_truncated(fb, t_x, toast_y + 14, s_osd_status, text_col, 2, toast_w - 24);
+}
+
+void ui_menu_show_toast(const char* msg, bool is_error) {
+    ui_trigger_osd_toast(msg, is_error);
 }

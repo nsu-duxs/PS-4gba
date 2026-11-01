@@ -26,7 +26,8 @@ typedef enum UISFX {
     UI_SFX_VALUE_CHANGE      = 5, /* Alterar Valor (D-PAD Esq/Dir): clique sutil ~440Hz (40ms) */
     UI_SFX_CONFIRM           = 6, /* Confirmar / Selecionar (Cruz / X): toque positivo ~880Hz -> 1320Hz (90ms) */
     UI_SFX_TOUCHPAD          = 7, /* Touchpad: clique holografico ~1200Hz -> 800Hz (80ms) */
-    UI_SFX_COUNT             = 8
+    UI_SFX_ERROR             = 8, /* Erro / Acao Bloqueada: tom duplo grave ~150Hz (120ms) */
+    UI_SFX_COUNT             = 9
 } UISFX;
 
 /* Aliases de compatibilidade */

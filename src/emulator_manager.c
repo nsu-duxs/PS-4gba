@@ -5,6 +5,8 @@
 #include "save_manager.h"
 #include "input_ds4.h"
 #include "ps4_jailbreak.h"
+#include "ui_menu.h"
+#include "i18n.h" 
 #include <stdio.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -37,6 +39,49 @@ static bool s_cheat_file_found[GBA_MAX_INSTANCES] = {0};
 static char s_cheat_status[GBA_MAX_INSTANCES][256] = {{0}};
 static int s_last_usb_ports_mounted = 0;
 static int s_last_usb_cht_count = 0;
+static EmulatorSpeed s_emulator_speed = EMULATOR_SPEED_1X;
+static int s_ff_subframe = 0;
+
+EmulatorSpeed emulator_get_speed(void) {
+    return s_emulator_speed;
+}
+
+bool emulator_is_fast_forward_allowed(void) {
+    if (g_gba_ctx.active_count > 1) {
+        return false;
+    }
+    if (link_hub_is_cable_enabled()) {
+        return false;
+    }
+    return true;
+}
+
+bool emulator_set_speed(EmulatorSpeed speed) {
+    if ((int)speed < 0 || speed >= EMULATOR_SPEED_COUNT) {
+        speed = EMULATOR_SPEED_1X;
+    }
+    if (speed != EMULATOR_SPEED_1X && !emulator_is_fast_forward_allowed()) {
+        s_emulator_speed = EMULATOR_SPEED_1X;
+        return false;
+    }
+    s_emulator_speed = speed;
+    s_ff_subframe = 0;
+    return true;
+}
+
+void emulator_cycle_speed(int delta) {
+    if (!emulator_is_fast_forward_allowed()) {
+        s_emulator_speed = EMULATOR_SPEED_1X;
+        return;
+    }
+    int cur = (int)s_emulator_speed;
+    int next = (cur + delta) % EMULATOR_SPEED_COUNT;
+    if (next < 0) {
+        next += EMULATOR_SPEED_COUNT;
+    }
+    s_emulator_speed = (EmulatorSpeed)next;
+    s_ff_subframe = 0;
+}
 
 typedef struct __attribute__((aligned(64))) GBAWorker {
     OrbisPthread thread;
@@ -522,6 +567,12 @@ bool emulator_join_player(int slot_index, OrbisUserServiceUserId user_id) {
         return false;
     }
 
+    if (slot_index > 0 && s_emulator_speed != EMULATOR_SPEED_1X) {
+        s_emulator_speed = EMULATOR_SPEED_1X;
+        s_ff_subframe = 0;
+        ui_menu_show_toast(i18n_get(STR_TOAST_FF_RESET_BY_LINK), false);
+    }
+
     if (!instantiate_player_slot(slot_index, g_gba_ctx.rom_path, user_id)) {
         return false;
     }
@@ -569,8 +620,35 @@ void emulator_step_lockstep_frame(void) {
         return;
     }
 
+    if (active_instances > 1 || link_hub_is_cable_enabled()) {
+        s_emulator_speed = EMULATOR_SPEED_1X;
+    }
+
     if (active_instances == 1) {
-        finish_instance_frame(first_active);
+        int steps = 1;
+        if (s_emulator_speed == EMULATOR_SPEED_2X) {
+            steps = 2;
+        } else if (s_emulator_speed == EMULATOR_SPEED_1_5X) {
+            s_ff_subframe ^= 1;
+            steps = (s_ff_subframe == 1) ? 2 : 1;
+        }
+
+        struct GBA* gba = s_frame_gbas[first_active];
+        for (int step = 0; step < steps; ++step) {
+            bool is_last_step = (step == steps - 1);
+            if (!is_last_step) {
+                gba->video.frameskip = 0;
+                gba->video.frameskipCounter = 1;
+            } else {
+                gba->video.frameskip = 0;
+                gba->video.frameskipCounter = skip_render ? 1 : 0;
+            }
+
+            s_start_frames[first_active] = gba->video.frameCounter;
+            s_start_cycles[first_active] = (uint32_t)mTimingCurrentTime(&gba->timing);
+
+            finish_instance_frame(first_active);
+        }
         return;
     }
 

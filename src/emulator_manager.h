@@ -27,6 +27,13 @@ typedef struct PS4GBA_Context {
     char rom_path[256];
 } PS4GBA_Context;
 
+typedef enum {
+    EMULATOR_SPEED_1X = 0,
+    EMULATOR_SPEED_1_5X,
+    EMULATOR_SPEED_2X,
+    EMULATOR_SPEED_COUNT
+} EmulatorSpeed;
+
 extern PS4GBA_Context g_gba_ctx;
 
 bool emulator_init_session(const char* const rom_paths[GBA_MAX_INSTANCES], int num_players);
@@ -38,6 +45,12 @@ void emulator_destroy_all(void);
 void emulator_pause_workers(void);
 void emulator_prepare_instance_for_save(int slot_index);
 void emulator_restore_instance_after_state(int slot_index);
+
+/* Fast Forward (Aceleracao da Emulacao) */
+EmulatorSpeed emulator_get_speed(void);
+bool emulator_set_speed(EmulatorSpeed speed);
+void emulator_cycle_speed(int delta);
+bool emulator_is_fast_forward_allowed(void);
 
 /* Suporte nativo a Trapacas / Cheats (.cht) */
 bool emulator_find_cheat_file(const char* rom_path, const char* rom_name, char* out_path, size_t max_len);
