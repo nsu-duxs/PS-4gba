@@ -2,6 +2,7 @@
 #include "video_scale.h"
 #include "audio_ps4.h"
 #include "ui_menu.h"
+#include "i18n.h"
 #include <string.h>
 #include <orbis/libkernel.h>
 #include <orbis/VideoOut.h>
@@ -290,14 +291,14 @@ void video_cycle_filter(int delta) {
 const char* video_get_filter_name(PS4VideoFilter filter) {
     switch (filter) {
     case PS4_FILTER_NEAREST:
-        return "Pixel Puro (Nearest Neighbor)";
+        return i18n_get(STR_FILTER_NEAREST);
     case PS4_FILTER_SCALENX:
-        return "ScaleNx (Scale2x / Scale3x / Scale4x)";
+        return i18n_get(STR_FILTER_SCALENX);
     case PS4_FILTER_HQX:
-        return "HQx (aprox. hq2x / hq3x / hq4x)";
+        return i18n_get(STR_FILTER_HQX);
     case PS4_FILTER_XBR:
     default:
-        return "xBR-lite (aprox. xBRZ / Super-xBR)";
+        return i18n_get(STR_FILTER_XBR);
     }
 }
 
@@ -319,16 +320,16 @@ void video_cycle_scale(int delta) {
 const char* video_get_scale_name(PS4VideoScale scale) {
     switch (scale) {
     case PS4_SCALE_1X:
-        return "1X (Nativo 240x160)";
+        return i18n_get(STR_SCALE_1X);
     case PS4_SCALE_2X:
-        return "2X (480x320)";
+        return i18n_get(STR_SCALE_2X);
     case PS4_SCALE_3X:
-        return "3X (720x480)";
+        return i18n_get(STR_SCALE_3X);
     case PS4_SCALE_4X:
-        return "4X (960x640)";
+        return i18n_get(STR_SCALE_4X);
     case PS4_SCALE_MAX:
     default:
-        return "6X Max (1440x960 Super-Sampling)";
+        return i18n_get(STR_SCALE_MAX);
     }
 }
 
@@ -346,7 +347,7 @@ void video_toggle_smoothing(void) {
 }
 
 const char* video_get_smoothing_name(bool enabled) {
-    return enabled ? "LIGADO (Bilinear Suave)" : "DESLIGADO (Sharp / Raw Pixels)";
+    return enabled ? i18n_get(STR_SMOOTH_ON) : i18n_get(STR_SMOOTH_OFF);
 }
 
 void video_set_display_mode(PS4VideoDisplay mode) {
@@ -365,8 +366,8 @@ void video_cycle_display_mode(int delta) {
 }
 
 const char* video_get_display_mode_name(PS4VideoDisplay mode) {
-    return (mode == PS4_DISPLAY_STRETCH_16_9) ? "Esticar Tela Inteira (Full 16:9)"
-                                              : "Aspecto 3:2 Perfeito (Recomendado)";
+    return (mode == PS4_DISPLAY_STRETCH_16_9) ? i18n_get(STR_DISPLAY_STRETCH)
+                                              : i18n_get(STR_DISPLAY_ASPECT);
 }
 
 int video_get_auto_degrade_level(void) {

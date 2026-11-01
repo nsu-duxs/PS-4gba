@@ -5,6 +5,7 @@
 #include "save_manager.h"
 #include "link_cable_hub.h"
 #include "ps4_jailbreak.h"
+#include "i18n.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +64,7 @@ enum {
     LAUNCHER_VA_FPS_LIMIT,
     LAUNCHER_VA_AUDIO_MODE,
     LAUNCHER_VA_MENU_SFX,
+    LAUNCHER_VA_LANGUAGE,
     LAUNCHER_VA_EXIT_APP,
     LAUNCHER_VA_COUNT
 };
@@ -89,6 +91,7 @@ enum {
     OSD_CFG_FPS_LIMIT,
     OSD_CFG_AUDIO_FOCUS,
     OSD_CFG_MENU_SFX,
+    OSD_CFG_LANGUAGE,
     OSD_CFG_COUNT
 };
 
@@ -127,7 +130,10 @@ static char s_rom_files[UI_MAX_ROMS][UI_MAX_FILENAME];
 static char s_rom_paths[UI_MAX_ROMS][UI_MAX_PATH];
 static int s_rom_count = 0;
 static int s_usb_rom_count = 0;
-static char s_usb_status_str[128] = "USB: Inicializando portas /mnt/usb0..7...";
+static int s_usb_ports_found = 0;
+static char s_active_usb_ports[64] = "";
+static bool s_is_demo_rom_only = false;
+static char s_usb_status_str[128] = "";
 
 /* Estado de navegacao do Launcher */
 static int s_launcher_tab = LAUNCHER_TAB_GAMES;
@@ -547,16 +553,16 @@ static void draw_graphical_dualshock4_tutorial(uint32_t* fb, int cx, int cy) {
     int card_aud_y = 606; /* 4. Base: [L3 + R3] */
 
     draw_control_card(fb, col_l_x, card_l1_y, card_w, card_h,
-                      "[L1 / L2]", "Botao L");
+                      "[L1 / L2]", i18n_get(STR_CTRL_BTN_L));
 
     draw_control_card(fb, col_l_x, card_sel_y, card_w, card_h,
-                      "[TOUCHPAD / TRIANGULO]", "Botao SELECT GBA");
+                      i18n_get(STR_CTRL_SEL_KEY), i18n_get(STR_CTRL_BTN_SELECT));
 
     draw_control_card(fb, col_l_x, card_dp_y, card_w, card_h,
-                      "[D-PAD / ANALOG ESQ]", "Movimento GBA");
+                      i18n_get(STR_CTRL_DPAD_KEY), i18n_get(STR_CTRL_MOVEMENT));
 
     draw_control_card(fb, col_l_x, card_aud_y, card_w, card_h,
-                      "[L3 + R3]", "Alternar Foco de Audio");
+                      "[L3 + R3]", i18n_get(STR_CTRL_AUDIO_FOCUS));
 
     /* 2. Coluna Direita: Caixas alinhadas verticalmente com a posicao fisica dos botoes */
     int col_r_x = 1170;
@@ -567,19 +573,19 @@ static void draw_graphical_dualshock4_tutorial(uint32_t* fb, int cx, int cy) {
     int card_st_y = 606; /* 5. Base: [R3 (CLICK DIR)] */
 
     draw_control_card(fb, col_r_x, card_r1_y, card_w, card_h,
-                      "[R1 / R2]", "Botao R");
+                      "[R1 / R2]", i18n_get(STR_CTRL_BTN_R));
 
     draw_control_card(fb, col_r_x, card_op_y, card_w, card_h,
-                      "[OPTIONS]", "Abrir Menu / Entrar no Jogo");
+                      "[OPTIONS]", i18n_get(STR_CTRL_OPEN_MENU));
 
     draw_control_card(fb, col_r_x, card_b_y, card_w, card_h,
-                      "[QUADRADO / BOLA]", "Botao B");
+                      i18n_get(STR_CTRL_SQUARE_CIRCLE), i18n_get(STR_CTRL_BTN_B));
 
     draw_control_card(fb, col_r_x, card_a_y, card_w, card_h,
-                      "[CRUZ (X)]", "Botao A");
+                      i18n_get(STR_CTRL_CROSS), i18n_get(STR_CTRL_BTN_A));
 
     draw_control_card(fb, col_r_x, card_st_y, card_w, card_h,
-                      "[R3]", "Botao START GBA");
+                      "[R3]", i18n_get(STR_CTRL_BTN_START));
 
     /* 3. Bloco Central: Silhueta Grafica 2D do DualShock 4 (Centralizado em cx = 960) */
     draw_rect_solid(fb, cx - 140, cy - 70, 280, 140, COLOR_PS_CHASSIS);
@@ -690,10 +696,10 @@ static void draw_graphical_dualshock4_tutorial(uint32_t* fb, int cx, int cy) {
 
     draw_box_rpg(fb, banner_x, banner_y, banner_w, banner_h, 0xFF14243BU, COLOR_BORDER_CYAN);
     ui_draw_text_truncated(fb, banner_x + 24, banner_y + 11,
-                           "DICA MULTIPLAYER: Conecte ate 4 Controles DualShock 4 ao PS4.",
+                           i18n_get(STR_CTRL_MP_TIP_1),
                            COLOR_TEXT_GOLD, 2, banner_w - 48);
     ui_draw_text_truncated(fb, banner_x + 24, banner_y + 36,
-                           "Nos Controles 2, 3 e 4, aperte OPTIONS para entrar na partida a qualquer momento via Drop-In.",
+                           i18n_get(STR_CTRL_MP_TIP_2),
                            COLOR_TEXT_USB, 2, banner_w - 48);
 }
 
@@ -709,13 +715,13 @@ static void draw_graphical_gba_classic_tutorial(uint32_t* fb, int cx, int cy) {
     int card_sel_y = 606; /* 3. Base: [SELECT GBA] */
 
     draw_control_card(fb, col_l_x, card_l1_y, card_w, card_h,
-                      "Botao L GBA", "L1 / L2");
+                      i18n_get(STR_CTRL_GBA_L), "L1 / L2");
 
     draw_control_card(fb, col_l_x, card_dp_y, card_w, card_h,
-                      "D-Pad GBA", "D-Pad / Analogico Esquerdo");
+                      "D-Pad GBA", i18n_get(STR_CTRL_GBA_DPAD_DESC));
 
     draw_control_card(fb, col_l_x, card_sel_y, card_w, card_h,
-                      "SELECT GBA", "Touchpad / Triangulo");
+                      "SELECT GBA", i18n_get(STR_CTRL_GBA_SEL_DESC));
 
     /* 2. Coluna Direita: Botoes GBA -> PS4 */
     int col_r_x = 1170;
@@ -725,13 +731,13 @@ static void draw_graphical_gba_classic_tutorial(uint32_t* fb, int cx, int cy) {
     int card_st_y = 606; /* 4. Base: [START GBA] */
 
     draw_control_card(fb, col_r_x, card_r1_y, card_w, card_h,
-                      "Botao R GBA", "R1 / R2");
+                      i18n_get(STR_CTRL_GBA_R), "R1 / R2");
 
     draw_control_card(fb, col_r_x, card_a_y, card_w, card_h,
-                      "Botao A GBA", "Cruz (X)");
+                      i18n_get(STR_CTRL_GBA_A), i18n_get(STR_CTRL_GBA_A_DESC));
 
     draw_control_card(fb, col_r_x, card_b_y, card_w, card_h,
-                      "Botao B GBA", "Quadrado / Bola");
+                      i18n_get(STR_CTRL_GBA_B), i18n_get(STR_CTRL_GBA_B_DESC));
 
     draw_control_card(fb, col_r_x, card_st_y, card_w, card_h,
                       "START GBA", "R3");
@@ -898,10 +904,10 @@ static void draw_graphical_gba_classic_tutorial(uint32_t* fb, int cx, int cy) {
 
     draw_box_rpg(fb, banner_x, banner_y, banner_w, banner_h, 0xFF14243BU, COLOR_BORDER_CYAN);
     ui_draw_text_truncated(fb, banner_x + 24, banner_y + 11,
-                           "DICA MULTIPLAYER: Conecte ate 4 Controles DualShock 4 ao PS4.",
+                           i18n_get(STR_CTRL_MP_TIP_1),
                            COLOR_TEXT_GOLD, 2, banner_w - 48);
     ui_draw_text_truncated(fb, banner_x + 24, banner_y + 36,
-                           "Nos Controles 2, 3 e 4, aperte OPTIONS para entrar na partida a qualquer momento via Drop-In.",
+                           i18n_get(STR_CTRL_MP_TIP_2),
                            COLOR_TEXT_USB, 2, banner_w - 48);
 }
 
@@ -1035,9 +1041,29 @@ static void sort_rom_list(void) {
     }
 }
 
+static void ui_refresh_localized_usb_status(void) {
+    if (s_usb_ports_found > 0) {
+        if (s_usb_rom_count > 0) {
+            snprintf(s_usb_status_str, sizeof(s_usb_status_str),
+                     i18n_get(STR_USB_DETECTED_FMT), s_active_usb_ports, s_usb_rom_count);
+        } else {
+            snprintf(s_usb_status_str, sizeof(s_usb_status_str),
+                     i18n_get(STR_USB_EMPTY_FMT), s_active_usb_ports);
+        }
+    } else {
+        snprintf(s_usb_status_str, sizeof(s_usb_status_str), "%s", i18n_get(STR_USB_NONE));
+    }
+
+    if (s_is_demo_rom_only && s_rom_count == 1) {
+        strncpy(s_rom_files[0], i18n_get(STR_DEMO_ROM_NAME), UI_MAX_FILENAME - 1);
+        s_rom_files[0][UI_MAX_FILENAME - 1] = '\0';
+    }
+}
+
 void ui_menu_scan_roms(void) {
     ps4_jailbreak_system();
     s_rom_count = 0;
+    s_is_demo_rom_only = false;
     memset(s_rom_files, 0, sizeof(s_rom_files));
     memset(s_rom_paths, 0, sizeof(s_rom_paths));
 
@@ -1049,8 +1075,8 @@ void ui_menu_scan_roms(void) {
     scan_directory_recursive("/data/homebrew/gba", 0);
 
     int ps4_roms = s_rom_count;
-    char active_usb_ports[64] = "";
-    int usb_ports_found = 0;
+    s_active_usb_ports[0] = '\0';
+    s_usb_ports_found = 0;
 
     /* 2. Portas USB montadas (/mnt/usb0 ate /mnt/usb7) */
     for (int u = 0; u < 8 && s_rom_count < UI_MAX_ROMS; ++u) {
@@ -1072,10 +1098,10 @@ void ui_menu_scan_roms(void) {
         }
 
         if (mounted) {
-            if (usb_ports_found == 0) {
-                snprintf(active_usb_ports, sizeof(active_usb_ports), "/mnt/usb%d", u);
+            if (s_usb_ports_found == 0) {
+                snprintf(s_active_usb_ports, sizeof(s_active_usb_ports), "/mnt/usb%d", u);
             }
-            usb_ports_found++;
+            s_usb_ports_found++;
             scan_directory_recursive(usb_path, 0);
         }
     }
@@ -1087,40 +1113,32 @@ void ui_menu_scan_roms(void) {
     }
     if (ext) {
         closedir(ext);
-        if (usb_ports_found == 0) {
-            snprintf(active_usb_ports, sizeof(active_usb_ports), "/mnt/ext0");
+        if (s_usb_ports_found == 0) {
+            snprintf(s_active_usb_ports, sizeof(s_active_usb_ports), "/mnt/ext0");
         }
-        usb_ports_found++;
+        s_usb_ports_found++;
         scan_directory_recursive("/mnt/ext0", 0);
     }
 
     s_usb_rom_count = s_rom_count - ps4_roms;
-
-    if (usb_ports_found > 0) {
-        if (s_usb_rom_count > 0) {
-            snprintf(s_usb_status_str, sizeof(s_usb_status_str),
-                     "USB: %s (%d ROMs USB detectadas)", active_usb_ports, s_usb_rom_count);
-        } else {
-            snprintf(s_usb_status_str, sizeof(s_usb_status_str),
-                     "USB: %s montado (0 ROMs encontradas na raiz/pastas)", active_usb_ports);
-        }
-    } else {
-        snprintf(s_usb_status_str, sizeof(s_usb_status_str),
-                 "USB: Nenhum pendrive detectado (Formate em FAT32 ou exFAT)");
-    }
 
     if (s_rom_count > 1) {
         sort_rom_list();
     }
 
     if (s_rom_count == 0) {
-        strncpy(s_rom_files[0], "test.gba (Demo 4P Link Integrada)", UI_MAX_FILENAME - 1);
+        s_is_demo_rom_only = true;
+        strncpy(s_rom_files[0], i18n_get(STR_DEMO_ROM_NAME), UI_MAX_FILENAME - 1);
+        s_rom_files[0][UI_MAX_FILENAME - 1] = '\0';
         snprintf(s_rom_paths[0], UI_MAX_PATH, "%s/test.gba", PS4_ROMS_DIR);
         s_rom_count = 1;
     }
+
+    ui_refresh_localized_usb_status();
 }
 
 void ui_menu_init(void) {
+    i18n_init();
     save_manager_init();
     ui_menu_scan_roms();
     s_app_state = UI_STATE_SPLASH;
@@ -1219,14 +1237,19 @@ void ui_menu_render_join_hint(uint32_t* fb, struct PS4GBA_Context* ctx) {
     draw_rect_solid(fb, banner_x, banner_y, banner_w, banner_h, 0xFF14243BU);
     draw_rect_border(fb, banner_x, banner_y, banner_w, banner_h, 2, COLOR_BORDER_BLUE);
 
-    int cur_x = banner_x + 24;
-    int text_y = banner_y + 14;
-
-    ui_draw_text(fb, cur_x, text_y, "Aperte ", COLOR_TEXT_LIGHT, 2);
-    cur_x += 7 * 16;
-
+    const char* prefix = i18n_get(STR_JOIN_HINT_PREFIX);
+    const char* suffix = i18n_get(STR_JOIN_HINT_SUFFIX);
+    int prefix_px = (int)strlen(prefix) * 16;
+    int suffix_px = (int)strlen(suffix) * 16;
     int btn_w = 126;
     int btn_h = 26;
+    int total_px = prefix_px + btn_w + 8 + suffix_px;
+    int cur_x = banner_x + (banner_w - total_px) / 2;
+    int text_y = banner_y + 14;
+
+    ui_draw_text(fb, cur_x, text_y, prefix, COLOR_TEXT_LIGHT, 2);
+    cur_x += prefix_px;
+
     int btn_x = cur_x;
     int btn_y = banner_y + 9;
 
@@ -1235,7 +1258,7 @@ void ui_menu_render_join_hint(uint32_t* fb, struct PS4GBA_Context* ctx) {
     ui_draw_text(fb, btn_x + 7, btn_y + 5, "OPTIONS", COLOR_BORDER_CYAN, 2);
     cur_x += btn_w + 8;
 
-    ui_draw_text(fb, cur_x, text_y, " para entrar com novo jogador", COLOR_TEXT_LIGHT, 2);
+    ui_draw_text(fb, cur_x, text_y, suffix, COLOR_TEXT_LIGHT, 2);
 }
 
 /* ==============================================================================
@@ -1559,14 +1582,18 @@ void ui_menu_render_splash(uint32_t* fb) {
             ui_draw_text(fb, cx - 46, banner_y + 16, "4", four_col, 4);
             ui_draw_text(fb, cx - 14, banner_y + 16, "GBA", COLOR_SPLASH_CYAN, 4);
 
-            ui_draw_text(fb, cx - 136, banner_y + 64, "CONECTANDO 4 JOGADORES...", 0xFF8D99AEU, 2);
+            const char* conn_txt = i18n_get(STR_SPLASH_CONNECTING);
+            int conn_x = cx - ((int)strlen(conn_txt) * 16) / 2;
+            ui_draw_text(fb, conn_x, banner_y + 64, conn_txt, 0xFF8D99AEU, 2);
         } else {
             /* Nome oficial consolidado: "PSgba" */
             ui_draw_text(fb, cx - 80, banner_y + 16, "PS", COLOR_PS_NEON_BLUE, 4);
             ui_draw_text(fb, cx - 16, banner_y + 16, "gba", COLOR_TEXT_GOLD, 4);
 
             /* Subtitulo em Amarelo Dourado com Versao v00.10 */
-            ui_draw_text(fb, cx - 272, banner_y + 64, "4-WAY SPLIT-SCREEN EMULATOR v00.10", COLOR_TEXT_GOLD, 2);
+            const char* sub_txt = i18n_get(STR_SPLASH_SUBTITLE);
+            int sub_x = cx - ((int)strlen(sub_txt) * 16) / 2;
+            ui_draw_text(fb, sub_x, banner_y + 64, sub_txt, COLOR_TEXT_GOLD, 2);
         }
     }
 
@@ -1584,7 +1611,9 @@ void ui_menu_render_splash(uint32_t* fb) {
         draw_rect_border(fb, cred_x + 3, cred_y + 3, cred_w - 6, cred_h - 6, 1, 0xFF1D3557U);
 
         /* Texto guia superior */
-        ui_draw_text(fb, cx - 60, cred_y + 14, "DESENVOLVIDO POR", 0xFF8899AAU, 1);
+        const char* dev_by = i18n_get(STR_SPLASH_DEVELOPED_BY);
+        int dev_x = cx - ((int)strlen(dev_by) * 8) / 2;
+        ui_draw_text(fb, dev_x, cred_y + 14, dev_by, 0xFF8899AAU, 1);
 
         /* Nomes em destaque: felipecjb (Azul P1) x nsu-duxs (Vermelho P2) */
         int names_x = cx - 160;
@@ -1644,15 +1673,17 @@ void ui_menu_render_splash(uint32_t* fb) {
      * -------------------------------------------------------------------------- */
     if (frame < 180) {
         /* Dica discreta no rodapé durante a animação inicial */
-        ui_draw_text(fb, cx - 76, 1044, "[X / OPTIONS] Pular", 0xFF8D99AEU, 1);
+        const char* skip_txt = i18n_get(STR_SPLASH_SKIP);
+        int skip_x = cx - ((int)strlen(skip_txt) * 8) / 2;
+        ui_draw_text(fb, skip_x, 1044, skip_txt, 0xFF8D99AEU, 1);
     } else {
         /* Title Screen Interativa: Espera por qualquer botão do DualShock 4 */
         int offset_y = (int)(sinf((float)s_splash_frame * 0.1f) * 4.0f);
         uint32_t prompt_color = ((s_splash_frame / 30) % 2 == 0) ? COLOR_TEXT_GOLD : COLOR_TEXT_WHITE;
 
-        /* Centralizado perfeitamente: 34 chars * 16px = 544px -> X = 960 - 272 = 688.
-         * Y = 990 + offset_y fica entre a caixa de créditos (Y=956) e a borda inferior (Y=1056). */
-        ui_draw_text(fb, 688, 990 + offset_y, "Aperte qualquer botao para comecar", prompt_color, 2);
+        const char* prompt_txt = i18n_get(STR_PRESS_ANY_BUTTON);
+        int prompt_x = (PS4_SCREEN_WIDTH - ((int)strlen(prompt_txt) * 16)) / 2;
+        ui_draw_text(fb, prompt_x, 990 + offset_y, prompt_txt, prompt_color, 2);
     }
 
     /* Avanço contínuo do fotograma (loop infinito de animação idle na Title Screen) */
@@ -1700,7 +1731,7 @@ void ui_menu_render_disclaimer(uint32_t* fb) {
     draw_rect_solid(fb, card_x + card_w - 8, card_y + card_h - 8, 6, 6, COLOR_TEXT_GOLD);
 
     /* Titulo Superior Centrado: [ AVISO LEGAL & COMPROMISSO ] */
-    const char* title = "[ AVISO LEGAL & COMPROMISSO ]";
+    const char* title = i18n_get(STR_DISCLAIMER_TITLE);
     int title_len = (int)strlen(title);
     int title_x = (PS4_SCREEN_WIDTH - (title_len * 16)) / 2;
     ui_draw_text(fb, title_x, card_y + 26, title, COLOR_TEXT_GOLD, 2);
@@ -1712,10 +1743,10 @@ void ui_menu_render_disclaimer(uint32_t* fb) {
     /* Paragrafo 1: Finalidade do Projeto */
     int text_x = card_x + 45; /* 355 */
     ui_draw_text(fb, text_x, card_y + 80,
-                 "Este projeto foi desenvolvido estritamente para fins de",
+                 i18n_get(STR_DISCLAIMER_P1_L1),
                  COLOR_TEXT_LIGHT, 2);
     ui_draw_text(fb, text_x, card_y + 106,
-                 "preservacao historica e engenharia de software.",
+                 i18n_get(STR_DISCLAIMER_P1_L2),
                  COLOR_TEXT_LIGHT, 2);
 
     /* Banner em Destaque Vermelho: Manifesto Anti-Pirataria */
@@ -1725,42 +1756,42 @@ void ui_menu_render_disclaimer(uint32_t* fb) {
     draw_rect_solid(fb, banner_x, banner_y, banner_w, 42, 0xFF360A0AU);
     draw_rect_border(fb, banner_x, banner_y, banner_w, 42, 2, COLOR_TEXT_RED);
 
-    const char* alert_msg = "Somos COMPLETAMENTE CONTRA A PIRATARIA em qualquer forma.";
+    const char* alert_msg = i18n_get(STR_DISCLAIMER_ALERT);
     int alert_len = (int)strlen(alert_msg);
     int alert_x = (PS4_SCREEN_WIDTH - (alert_len * 16)) / 2;
     ui_draw_text(fb, alert_x, banner_y + 13, alert_msg, COLOR_TEXT_RED, 2);
 
     /* Paragrafo 2: Introducao aos Compromissos */
     ui_draw_text(fb, text_x, card_y + 204,
-                 "Ao utilizar o PSgba, voce declara e concorda que:",
+                 i18n_get(STR_DISCLAIMER_INTRO),
                  COLOR_TEXT_WHITE, 2);
 
     /* Compromisso 1 */
     int item_x = text_x + 20; /* 375 */
     ui_draw_text(fb, item_x, card_y + 242, "1.", COLOR_TEXT_GOLD, 2);
     ui_draw_text(fb, item_x + 48, card_y + 242,
-                 "Nao utilizara pirataria para obter quaisquer ROMs",
+                 i18n_get(STR_DISCLAIMER_ITEM1_L1),
                  COLOR_TEXT_LIGHT, 2);
     ui_draw_text(fb, item_x + 48, card_y + 268,
-                 "ou arquivos de BIOS.",
+                 i18n_get(STR_DISCLAIMER_ITEM1_L2),
                  COLOR_TEXT_LIGHT, 2);
 
     /* Compromisso 2 */
     ui_draw_text(fb, item_x, card_y + 308, "2.", COLOR_TEXT_GOLD, 2);
     ui_draw_text(fb, item_x + 48, card_y + 308,
-                 "Utilizara exclusivamente copias de seguranca (backups) geradas a",
+                 i18n_get(STR_DISCLAIMER_ITEM2_L1),
                  COLOR_TEXT_LIGHT, 2);
     ui_draw_text(fb, item_x + 48, card_y + 334,
-                 "partir dos seus proprios cartuchos originais legalmente adquiridos.",
+                 i18n_get(STR_DISCLAIMER_ITEM2_L2),
                  COLOR_TEXT_LIGHT, 2);
 
     /* Compromisso 3 */
     ui_draw_text(fb, item_x, card_y + 374, "3.", COLOR_TEXT_GOLD, 2);
     ui_draw_text(fb, item_x + 48, card_y + 374,
-                 "Assume total responsabilidade pelo conteudo executado",
+                 i18n_get(STR_DISCLAIMER_ITEM3_L1),
                  COLOR_TEXT_LIGHT, 2);
     ui_draw_text(fb, item_x + 48, card_y + 400,
-                 "neste dispositivo.",
+                 i18n_get(STR_DISCLAIMER_ITEM3_L2),
                  COLOR_TEXT_LIGHT, 2);
 
     /* Botao de Confirmacao Animado Pulsante no Rodape */
@@ -1776,13 +1807,13 @@ void ui_menu_render_disclaimer(uint32_t* fb) {
     draw_rect_border(fb, btn_x, btn_y, btn_w, btn_h, 3, btn_border_col);
 
     /* Texto do Botao: [X] Concordo e Desejo Prosseguir */
-    const char* btn_text = "[X] Concordo e Desejo Prosseguir";
+    const char* btn_text = i18n_get(STR_DISCLAIMER_ACCEPT);
     int btn_text_len = (int)strlen(btn_text);
     int btn_text_x = (PS4_SCREEN_WIDTH - (btn_text_len * 16)) / 2;
     int btn_text_y = btn_y + (btn_h - 16) / 2;
 
     ui_draw_text(fb, btn_text_x, btn_text_y, "[X]", COLOR_PS_CROSS, 2);
-    ui_draw_text(fb, btn_text_x + 48, btn_text_y, " Concordo e Desejo Prosseguir", COLOR_TEXT_WHITE, 2);
+    ui_draw_text(fb, btn_text_x + 48, btn_text_y, i18n_get(STR_DISCLAIMER_ACCEPT_TEXT), COLOR_TEXT_WHITE, 2);
 
     s_disclaimer_frame++;
 }
@@ -1826,7 +1857,7 @@ void ui_menu_update_launcher(struct PS4GBA_Context* ctx, uint32_t buttons_presse
         ui_menu_scan_roms();
         s_launcher_rom_cursor = 0;
         snprintf(s_launcher_status, sizeof(s_launcher_status),
-                 "Varredura concluida: %d ROM(s) encontradas (%d USB, %d Internas)",
+                 i18n_get(STR_SCAN_DONE_FMT),
                  s_rom_count, s_usb_rom_count, s_rom_count - s_usb_rom_count);
         return;
     }
@@ -1865,8 +1896,8 @@ void ui_menu_update_launcher(struct PS4GBA_Context* ctx, uint32_t buttons_presse
                     audio_stop_splash_sfx();
                     ui_menu_trigger_join_hint();
                 } else {
-                    snprintf(s_launcher_status, sizeof(s_launcher_status),
-                             "Erro ao carregar ROM. Aperte [TRIANGULO] para atualizar lista.");
+                    snprintf(s_launcher_status, sizeof(s_launcher_status), "%s",
+                             i18n_get(STR_ROM_LOAD_ERR));
                 }
             }
         }
@@ -1916,6 +1947,11 @@ void ui_menu_update_launcher(struct PS4GBA_Context* ctx, uint32_t buttons_presse
                 break;
             case LAUNCHER_VA_MENU_SFX:
                 audio_set_menu_sfx_enabled(!audio_is_menu_sfx_enabled());
+                break;
+            case LAUNCHER_VA_LANGUAGE:
+                i18n_cycle_language(delta);
+                ui_refresh_localized_usb_status();
+                s_launcher_status[0] = '\0';
                 break;
             case LAUNCHER_VA_EXIT_APP:
                 if (buttons_pressed & ORBIS_PAD_BUTTON_CROSS) {
@@ -2002,9 +2038,9 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 audio_play_sfx(UI_SFX_VALUE_CHANGE);
                 char msg[128];
                 if (save_manager_get_mode() == SAVE_MODE_GROUP) {
-                    snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: GRUPO");
+                    snprintf(msg, sizeof(msg), "%s", i18n_get(STR_TOAST_SAVE_MODE_GRP));
                 } else {
-                    snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: INDIVIDUAL");
+                    snprintf(msg, sizeof(msg), "%s", i18n_get(STR_TOAST_SAVE_MODE_IND));
                 }
                 ui_trigger_osd_toast(msg, false);
             } else {
@@ -2012,7 +2048,7 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 s_thumb_cache_dirty = true;
                 audio_play_sfx(UI_SFX_VALUE_CHANGE);
                 char msg[128];
-                snprintf(msg, sizeof(msg), "[SLOT] Slot %d selecionado", save_manager_get_slot());
+                snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_SLOT_SEL_FMT), save_manager_get_slot());
                 ui_trigger_osd_toast(msg, false);
             }
         }
@@ -2032,9 +2068,9 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 {
                     char msg[128];
                     if (save_manager_get_mode() == SAVE_MODE_GROUP) {
-                        snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: GRUPO");
+                        snprintf(msg, sizeof(msg), "%s", i18n_get(STR_TOAST_SAVE_MODE_GRP));
                     } else {
-                        snprintf(msg, sizeof(msg), "[MODO] Tipo de Save: INDIVIDUAL");
+                        snprintf(msg, sizeof(msg), "%s", i18n_get(STR_TOAST_SAVE_MODE_IND));
                     }
                     ui_trigger_osd_toast(msg, false);
                 }
@@ -2044,7 +2080,7 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 s_thumb_cache_dirty = true;
                 {
                     char msg[128];
-                    snprintf(msg, sizeof(msg), "[SLOT] Slot %d selecionado", save_manager_get_slot());
+                    snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_SLOT_SEL_FMT), save_manager_get_slot());
                     ui_trigger_osd_toast(msg, false);
                 }
                 break;
@@ -2053,22 +2089,22 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                     if (save_manager_group_save_state_slot(ctx, cur_slot)) {
                         s_thumb_cache_dirty = true;
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado de Grupo salvo no Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_GRP_SAVED_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, false);
                     } else {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[ERRO] Falha ao salvar Estado de Grupo no Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_GRP_SAVE_ERR_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, true);
                     }
                 } else {
                     if (save_manager_quick_save_state_slot(ctx, s_osd_player, cur_slot)) {
                         s_thumb_cache_dirty = true;
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado salvo no Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_IND_SAVED_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, false);
                     } else {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[ERRO] Falha ao salvar Estado no Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_IND_SAVE_ERR_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, true);
                     }
                 }
@@ -2077,21 +2113,21 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 if (is_grp) {
                     if (save_manager_group_load_state_slot(ctx, cur_slot)) {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado de Grupo carregado do Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_GRP_LOADED_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, false);
                     } else {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[ERRO] Slot %d vazio!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_SLOT_EMPTY_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, true);
                     }
                 } else {
                     if (save_manager_quick_load_state_slot(ctx, s_osd_player, cur_slot)) {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[SUCESSO] Estado carregado do Slot %d!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_IND_LOADED_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, false);
                     } else {
                         char msg[128];
-                        snprintf(msg, sizeof(msg), "[ERRO] Slot %d vazio!", cur_slot);
+                        snprintf(msg, sizeof(msg), i18n_get(STR_TOAST_SLOT_EMPTY_FMT), cur_slot);
                         ui_trigger_osd_toast(msg, true);
                     }
                 }
@@ -2116,7 +2152,7 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 if (emulator_load_cheats(s_osd_player, ppath)) {
                     s_osd_cheat_cursor = 0;
                     s_osd_cheat_scroll = 0;
-                    snprintf(s_osd_status, sizeof(s_osd_status), "P%d: %d trapaca(s) recarregada(s)!",
+                    snprintf(s_osd_status, sizeof(s_osd_status), i18n_get(STR_CHEATS_RELOADED_FMT),
                              s_osd_player + 1, emulator_get_cheat_count(s_osd_player));
                     audio_play_sfx(UI_SFX_CONFIRM);
                 } else {
@@ -2172,10 +2208,10 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 bool now_en = emulator_is_cheat_enabled(s_osd_player, s_osd_cheat_cursor);
                 int n_codes = emulator_get_cheat_code_count(s_osd_player, s_osd_cheat_cursor);
                 bool is_m = emulator_is_cheat_master(s_osd_player, s_osd_cheat_cursor);
-                snprintf(s_osd_status, sizeof(s_osd_status), "P%d: %s [%s] (%d opcodes%s)",
+                snprintf(s_osd_status, sizeof(s_osd_status), i18n_get(STR_CHEATS_TOGGLED_FMT),
                          s_osd_player + 1,
                          emulator_get_cheat_name(s_osd_player, s_osd_cheat_cursor),
-                         now_en ? "ATIVADO" : "DESATIVADO",
+                         now_en ? i18n_get(STR_CHEATS_ENABLED) : i18n_get(STR_CHEATS_DISABLED),
                          n_codes, is_m ? " - Master" : "");
                 audio_play_sfx(UI_SFX_CONFIRM);
             }
@@ -2215,7 +2251,7 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
                 break;
             case OSD_CFG_FPS_LIMIT:
                 video_toggle_fps_limit();
-                snprintf(s_osd_status, sizeof(s_osd_status), "Bloqueio de FPS: %s",
+                snprintf(s_osd_status, sizeof(s_osd_status), i18n_get(STR_FPS_LIMIT_TOAST_FMT),
                          video_get_fps_limit_name(video_get_fps_limit()));
                 break;
             case OSD_CFG_AUDIO_FOCUS: {
@@ -2235,6 +2271,11 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
             }
             case OSD_CFG_MENU_SFX:
                 audio_set_menu_sfx_enabled(!audio_is_menu_sfx_enabled());
+                break;
+            case OSD_CFG_LANGUAGE:
+                i18n_cycle_language(delta);
+                ui_refresh_localized_usb_status();
+                s_osd_status[0] = '\0';
                 break;
             default:
                 break;
@@ -2258,12 +2299,12 @@ void ui_menu_update_osd(struct PS4GBA_Context* ctx, uint32_t buttons_pressed) {
             if (s_osd_link_cursor == OSD_LINK_POWER) {
                 bool next_state = !link_hub_is_cable_enabled();
                 link_hub_set_cable_enabled(next_state);
-                snprintf(s_osd_status, sizeof(s_osd_status),
-                         next_state ? "Link Cable: CONECTADO" : "Link Cable: DESCONECTADO");
+                snprintf(s_osd_status, sizeof(s_osd_status), "%s",
+                         next_state ? i18n_get(STR_LINK_TOAST_CONN) : i18n_get(STR_LINK_TOAST_DISC));
             } else if (s_osd_link_cursor == OSD_LINK_HOTPLUG && (buttons_pressed & ORBIS_PAD_BUTTON_CROSS)) {
                 link_hub_trigger_hotplug();
-                snprintf(s_osd_status, sizeof(s_osd_status),
-                         "Reconectando Link Cable... Volte ao jogo!");
+                snprintf(s_osd_status, sizeof(s_osd_status), "%s",
+                         i18n_get(STR_LINK_TOAST_HOTPLUG));
                 s_app_state = UI_STATE_INGAME;
             } else if (s_osd_link_cursor == OSD_LINK_DEV_TELEMETRY) {
                 s_show_dev_telemetry = !s_show_dev_telemetry;
@@ -2296,12 +2337,12 @@ void ui_menu_render_launcher(uint32_t* fb) {
     draw_rect_border(fb, 40, 24, PS4_SCREEN_WIDTH - 80, PS4_SCREEN_HEIGHT - 48, 3, COLOR_BORDER_CYAN);
     draw_rect_border(fb, 46, 30, PS4_SCREEN_WIDTH - 92, PS4_SCREEN_HEIGHT - 60, 1, COLOR_BORDER_INNER);
 
-    ui_draw_text(fb, 70, 44, "PSgba - GBA 4-WAY SPLIT-SCREEN EMULATOR v00.10", COLOR_TEXT_GOLD, 3);
+    ui_draw_text(fb, 70, 44, i18n_get(STR_APP_TITLE), COLOR_TEXT_GOLD, 3);
 
     const char* tabs[LAUNCHER_TAB_COUNT] = {
-        "[ JOGOS ]",
-        "[ VIDEO & AUDIO ]",
-        "[ CONTROLE E ATALHOS ]"
+        i18n_get(STR_TAB_GAMES),
+        i18n_get(STR_TAB_VIDEO_AUDIO),
+        i18n_get(STR_TAB_CONTROLS)
     };
 
     /* Barra de abas com margem de respiro de 40px (> 30px) antes da moldura */
@@ -2331,9 +2372,9 @@ void ui_menu_render_launcher(uint32_t* fb) {
         }
 
         char page_str[96];
-        snprintf(page_str, sizeof(page_str), "Pagina %d de %d  (Total: %d ROMs)", cur_page + 1, total_pages, s_rom_count);
+        snprintf(page_str, sizeof(page_str), i18n_get(STR_GAMES_PAGE_FMT), cur_page + 1, total_pages, s_rom_count);
 
-        ui_draw_text(fb, left_x + 30, left_y + 24, "LISTA DE JOGOS DISPONIVEIS", COLOR_TEXT_GOLD, 2);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_GAMES_LIST_TITLE), COLOR_TEXT_GOLD, 2);
         ui_draw_text_truncated(fb, left_x + left_w - 420, left_y + 24, page_str, COLOR_BORDER_CYAN, 2, 400);
         draw_rect_solid(fb, left_x + 20, left_y + 56, left_w - 40, 1, COLOR_BORDER_INNER);
 
@@ -2355,7 +2396,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
         }
 
         ui_draw_text_truncated(fb, left_x + 30, left_y + 668,
-                               "[ESQUERDA / DIREITA] Pular Pagina   [TRIANGULO] Atualizar Lista",
+                               i18n_get(STR_GAMES_NAV_HINT),
                                COLOR_TEXT_MUTED, 2, left_w - 60);
 
         uint32_t usb_col = (s_usb_rom_count > 0) ? COLOR_BORDER_CYAN : COLOR_TEXT_GOLD;
@@ -2369,7 +2410,7 @@ void ui_menu_render_launcher(uint32_t* fb) {
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "DETALHES DO JOGO", COLOR_TEXT_GOLD, 2, side_w - 48);
+            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, i18n_get(STR_SIDE_GAME_DETAILS), COLOR_TEXT_GOLD, 2, side_w - 48);
             draw_rect_solid(fb, side_x + 20, left_y + 56, side_w - 40, 1, COLOR_BORDER_INNER);
 
             if (s_rom_count > 0 && s_launcher_rom_cursor >= 0 && s_launcher_rom_cursor < s_rom_count) {
@@ -2377,67 +2418,67 @@ void ui_menu_render_launcher(uint32_t* fb) {
                 bool is_usb = (strncmp(s_rom_files[cur_idx], "[USB]", 5) == 0);
 
                 int ty = left_y + 80;
-                ui_draw_text(fb, side_x + 24, ty, "NOME DO ARQUIVO:", COLOR_BORDER_CYAN, 2); ty += 30;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_FILE_NAME), COLOR_BORDER_CYAN, 2); ty += 30;
                 ty += ui_draw_text_wrapped(fb, side_x + 24, ty, s_rom_files[cur_idx], COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 ty += 16;
 
-                ui_draw_text(fb, side_x + 24, ty, "CAMINHO COMPLETO:", COLOR_BORDER_CYAN, 2); ty += 30;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_FULL_PATH), COLOR_BORDER_CYAN, 2); ty += 30;
                 ty += ui_draw_text_wrapped(fb, side_x + 24, ty, s_rom_paths[cur_idx], COLOR_TEXT_MUTED, 1, side_w - 48, 14);
                 ty += 16;
 
-                ui_draw_text(fb, side_x + 24, ty, "DISPOSITIVO DE ARMAZENAMENTO:", COLOR_BORDER_CYAN, 2); ty += 30;
-                const char* stor_desc = is_usb ? "Pendrive ou HD Externo USB (/mnt/usbX)" : "Disco Rigido Interno do PS4 (/data)";
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_STORAGE_DEV), COLOR_BORDER_CYAN, 2); ty += 30;
+                const char* stor_desc = is_usb ? i18n_get(STR_SIDE_STOR_USB) : i18n_get(STR_SIDE_STOR_INT);
                 ty += ui_draw_text_wrapped(fb, side_x + 24, ty, stor_desc, is_usb ? COLOR_TEXT_GREEN : COLOR_TEXT_LIGHT, 2, side_w - 48, 24);
                 ty += 16;
 
-                ui_draw_text(fb, side_x + 24, ty, "SUPORTE MULTIPLAYER:", COLOR_BORDER_CYAN, 2); ty += 30;
-                const char* mp_desc = "Ate 4 Jogadores Simultaneos.\nLink Cable Virtual com Ring Buffer de alta velocidade em memoria RAM.";
-                ui_draw_text_wrapped(fb, side_x + 24, ty, mp_desc, COLOR_TEXT_USB, 2, side_w - 48, 24);
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_MP_SUPPORT), COLOR_BORDER_CYAN, 2); ty += 30;
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_SIDE_MP_DESC), COLOR_TEXT_USB, 2, side_w - 48, 24);
             }
         }
 
     } else if (s_launcher_tab == LAUNCHER_TAB_VIDEO_AUDIO) {
         draw_box_rpg(fb, left_x, left_y, left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
 
-        ui_draw_text(fb, left_x + 30, left_y + 24, "CONFIGURACOES DE VIDEO & AUDIO", COLOR_TEXT_GOLD, 2);
-        ui_draw_text_truncated(fb, left_x + 30, left_y + 54, "Ajuste imagem e som para televisores HD e 4K", COLOR_TEXT_MUTED, 2, left_w - 60);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_SETTINGS_TITLE), COLOR_TEXT_GOLD, 2);
+        ui_draw_text_truncated(fb, left_x + 30, left_y + 54, i18n_get(STR_SETTINGS_SUBTITLE), COLOR_TEXT_MUTED, 2, left_w - 60);
         draw_rect_solid(fb, left_x + 20, left_y + 86, left_w - 40, 1, COLOR_BORDER_INNER);
 
         char opt_display[160], opt_filter[160], opt_scale[160], opt_smooth[160];
-        char opt_fps[160], opt_fps_limit[160], opt_audio[160], opt_sfx[160];
+        char opt_fps[160], opt_fps_limit[160], opt_audio[160], opt_sfx[160], opt_lang[160];
 
-        snprintf(opt_display, sizeof(opt_display), "Proporcao da Tela: < %s >",
+        snprintf(opt_display, sizeof(opt_display), i18n_get(STR_SETTING_VIDEO_MODE),
                  video_get_display_mode_name(video_get_display_mode()));
-        snprintf(opt_filter, sizeof(opt_filter), "Modo de Qualidade / Upscaling: < %s >",
+        snprintf(opt_filter, sizeof(opt_filter), i18n_get(STR_SETTING_FILTER),
                  video_get_filter_name(video_get_filter()));
-        snprintf(opt_scale, sizeof(opt_scale), "Fator de Resolucao Interna: < %s >",
+        snprintf(opt_scale, sizeof(opt_scale), i18n_get(STR_SETTING_SCALE),
                  video_get_scale_name(video_get_scale()));
-        snprintf(opt_smooth, sizeof(opt_smooth), "Suavizacao (Bilinear): < %s >",
+        snprintf(opt_smooth, sizeof(opt_smooth), i18n_get(STR_SETTING_SMOOTH),
                  video_get_smoothing_name(video_get_smoothing()));
-        snprintf(opt_fps, sizeof(opt_fps), "Contador de FPS: < %s >",
-                 s_show_fps ? "LIGADO" : "DESLIGADO");
-        snprintf(opt_fps_limit, sizeof(opt_fps_limit), "Bloqueio de Framerate: < %s >",
+        snprintf(opt_fps, sizeof(opt_fps), i18n_get(STR_SETTING_SHOW_FPS),
+                 s_show_fps ? i18n_get(STR_ON) : i18n_get(STR_OFF));
+        snprintf(opt_fps_limit, sizeof(opt_fps_limit), i18n_get(STR_SETTING_FPS_LIMIT),
                  video_get_fps_limit_name(video_get_fps_limit()));
 
         const char* audio_name = (audio_get_mode() == PS4_AUDIO_MODE_MIX)
-                                     ? "Mix Todas as Telas"
-                                     : "Foco P1";
-        snprintf(opt_audio, sizeof(opt_audio), "Audio: < %s >", audio_name);
-        snprintf(opt_sfx, sizeof(opt_sfx), "Sons do Menu: < %s >",
-                 audio_is_menu_sfx_enabled() ? "LIGADO" : "DESLIGADO");
+                                     ? i18n_get(STR_AUDIO_MIX_ALL)
+                                     : i18n_get(STR_AUDIO_FOCUS_P1);
+        snprintf(opt_audio, sizeof(opt_audio), i18n_get(STR_SETTING_AUDIO_MODE), audio_name);
+        snprintf(opt_sfx, sizeof(opt_sfx), i18n_get(STR_SETTING_AUDIO_SFX),
+                 audio_is_menu_sfx_enabled() ? i18n_get(STR_ON) : i18n_get(STR_OFF));
+        snprintf(opt_lang, sizeof(opt_lang), "%s", i18n_get(STR_SETTING_LANGUAGE));
 
         const char* opts[LAUNCHER_VA_COUNT] = {
-            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_audio, opt_sfx,
-            "Sair do Emulador (Encerrar Aplicativo)"
+            opt_display, opt_filter, opt_scale, opt_smooth, opt_fps, opt_fps_limit, opt_audio, opt_sfx, opt_lang,
+            i18n_get(STR_MENU_EXIT)
         };
 
         for (int i = 0; i < LAUNCHER_VA_COUNT; ++i) {
             bool is_sel = (s_launcher_va_cursor == i);
-            int row_y = left_y + 98 + i * 58;
+            int row_y = left_y + 96 + i * 56;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 46, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 46, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 44, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 44, 1, COLOR_BORDER_CYAN);
             }
 
             char line[200];
@@ -2447,75 +2488,75 @@ void ui_menu_render_launcher(uint32_t* fb) {
         }
 
         ui_draw_text_truncated(fb, left_x + 30, left_y + 710,
-                               "[ESQUERDA / DIREITA / X] Alterar   [D-PAD CIMA/BAIXO] Navegar",
+                               i18n_get(STR_LAUNCHER_VA_HINT),
                                COLOR_TEXT_MUTED, 2, left_w - 60);
 
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "INFORMACAO DA OPCAO", COLOR_TEXT_GOLD, 2, side_w - 48);
+            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, i18n_get(STR_SIDE_OPT_INFO), COLOR_TEXT_GOLD, 2, side_w - 48);
             draw_rect_solid(fb, side_x + 20, left_y + 56, side_w - 40, 1, COLOR_BORDER_INNER);
 
             int ty = left_y + 80;
             switch (s_launcher_va_cursor) {
             case LAUNCHER_VA_DISPLAY:
-                ui_draw_text(fb, side_x + 24, ty, "PROPORCAO DA TELA:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_DISPLAY_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "3:2 Nativo: Preserva a geometria exata do Game Boy Advance com pillarboxing lateral.\n\n"
-                                     "16:9 Esticado: Preenche toda a area da tela da TV sem bordas pretas.",
+                                     i18n_get(STR_INFO_DISPLAY_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_FILTER:
-                ui_draw_text(fb, side_x + 24, ty, "ALGORITMO DE QUALIDADE:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_FILTER_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Pixel Puro: Nearest-neighbor classico com pixels nitidos.\n\n"
-                                     "ScaleNx: Realce inteligente de bordas sem desfoque.\n\n"
-                                     "HQx / xBR: Interpolacao vetorial avancada para visual moderno.",
+                                     i18n_get(STR_INFO_FILTER_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_SCALE:
-                ui_draw_text(fb, side_x + 24, ty, "FATOR INTERNO:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_SCALE_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "1X ate Max 4K: Define a resolucao interna de renderizacao antes da projecao na tela.\n\n"
-                                     "Em 4 Jogadores, o emulador ajusta automaticamente para garantir 60 FPS cravados.",
+                                     i18n_get(STR_INFO_SCALE_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_SMOOTH:
-                ui_draw_text(fb, side_x + 24, ty, "SUAVIZACAO BILINEAR:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_SMOOTH_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Aplica interpolacao bilinear na apresentacao final, eliminando cintilacoes e suavizando gradientes.",
+                                     i18n_get(STR_INFO_SMOOTH_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_SHOW_FPS:
-                ui_draw_text(fb, side_x + 24, ty, "CONTADOR DE FPS:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_FPS_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Exibe a taxa real de quadros por segundo no canto superior esquerdo da TV durante o jogo.",
+                                     i18n_get(STR_INFO_FPS_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_FPS_LIMIT:
-                ui_draw_text(fb, side_x + 24, ty, "BLOQUEIO DE FPS:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_FPS_LIM_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "60 FPS: Velocidade nominal original do Game Boy Advance.\n\n"
-                                     "30 FPS: Modo alternativo de sincronizacao para economia de processamento.",
+                                     i18n_get(STR_INFO_FPS_LIM_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_AUDIO_MODE:
-                ui_draw_text(fb, side_x + 24, ty, "MODO DE AUDIO:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_AUDIO_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Mix: Mistura o som de todos os jogadores ativos (25% cada).\n\n"
-                                     "Foco: Concentra 100% do volume na tela do Jogador 1 (atalho L3+R3).",
+                                     i18n_get(STR_INFO_AUDIO_DESC_L),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_MENU_SFX:
-                ui_draw_text(fb, side_x + 24, ty, "SONS DA INTERFACE:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_SFX_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Ativa ou desativa os efeitos sonoros ao navegar pelas abas e opcoes dos menus. O audio do jogo em execucao continua funcionando normalmente.",
+                                     i18n_get(STR_INFO_SFX_DESC),
+                                     COLOR_TEXT_WHITE, 2, side_w - 48, 24);
+                break;
+            case LAUNCHER_VA_LANGUAGE:
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_LANG_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text_wrapped(fb, side_x + 24, ty,
+                                     i18n_get(STR_INFO_LANG_DESC),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             case LAUNCHER_VA_EXIT_APP:
-                ui_draw_text(fb, side_x + 24, ty, "SAIR DO EMULADOR:", COLOR_BORDER_CYAN, 2); ty += 36;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_INFO_EXIT_TITLE), COLOR_BORDER_CYAN, 2); ty += 36;
                 ui_draw_text_wrapped(fb, side_x + 24, ty,
-                                     "Encerra a aplicacao de forma segura, sincronizando saves em disco, liberando controles Bluetooth e restaurando o estado original do kernel.",
+                                     i18n_get(STR_INFO_EXIT_DESC),
                                      COLOR_TEXT_WHITE, 2, side_w - 48, 24);
                 break;
             default:
@@ -2534,11 +2575,11 @@ void ui_menu_render_launcher(uint32_t* fb) {
     /* Rodape informativo fixo padronizado */
     if (s_launcher_tab == LAUNCHER_TAB_CONTROLS) {
         ui_draw_text_truncated(fb, 70, 970,
-                               "[D-PAD] Navegar   [O] Voltar   [TOUCHPAD] Alternar Visualizacao (DualShock 4 / Game Boy Advance)",
+                               i18n_get(STR_FOOTER_LAUNCHER_CTRL),
                                COLOR_TEXT_MUTED, 2, 1780);
     } else {
         ui_draw_text_truncated(fb, 70, 970,
-                               "[D-PAD] Navegar   [X] Confirmar   [O] Voltar   [TOUCHPAD] Ajuda/Detalhes   [TRIANGULO] Atualizar ROMs",
+                               i18n_get(STR_FOOTER_LAUNCHER_DEF),
                                COLOR_TEXT_MUTED, 2, 1780);
     }
 }
@@ -2573,21 +2614,21 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
     /* Linha superior: Titulo formatado com versao v00.10 */
     char title[160];
-    snprintf(title, sizeof(title), "MENU v00.10 - CONTROLE P%d (%s)",
+    snprintf(title, sizeof(title), i18n_get(STR_OSD_TITLE_FMT),
              s_osd_player + 1, ctx ? ctx->rom_name : "");
     ui_draw_text_truncated(fb, box_x + 36, box_y + 24, title, COLOR_TEXT_GOLD, 3, 1280);
 
     char link_tag[64];
-    snprintf(link_tag, sizeof(link_tag), "[LINK: %s]",
-             link_hub_is_cable_enabled() ? "CONECTADO" : "DESCONECTADO");
+    snprintf(link_tag, sizeof(link_tag), i18n_get(STR_OSD_LINK_TAG_FMT),
+             link_hub_is_cable_enabled() ? i18n_get(STR_LINK_CONNECTED) : i18n_get(STR_LINK_DISCONNECTED));
     ui_draw_text(fb, box_x + box_w - 380, box_y + 28, link_tag, COLOR_BORDER_CYAN, 2);
 
     const char* osd_tabs[OSD_TAB_COUNT] = {
-        "[ JOGO & SAVES ]",
-        "[ TRAPACAS / CHEATS ]",
-        "[ VIDEO & AUDIO ]",
-        "[ LINK CABLE ]",
-        "[ CONTROLES ]"
+        i18n_get(STR_MENU_SAVES),
+        i18n_get(STR_MENU_CHEATS),
+        i18n_get(STR_MENU_SETTINGS),
+        i18n_get(STR_OSD_TAB_LINK),
+        i18n_get(STR_OSD_TAB_CONTROLS)
     };
 
     /* Barra de abas do OSD alinhada e centrada com folga de respiro > 30px */
@@ -2606,7 +2647,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
     if (s_osd_tab == OSD_TAB_CHEATS) {
         draw_box_rpg(fb, left_x, left_y, left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-        ui_draw_text(fb, left_x + 30, left_y + 24, "TRAPACAS & CHEATS (ACTION REPLAY / GAMESHARK)", COLOR_TEXT_GOLD, 2);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_CHEATS_HEADER), COLOR_TEXT_GOLD, 2);
         draw_rect_solid(fb, left_x + 20, left_y + 56, left_w - 40, 1, COLOR_BORDER_INNER);
 
         bool has_file = emulator_has_cheat_file(s_osd_player);
@@ -2618,11 +2659,11 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
             if (has_file && total_cheats == 0) {
                 ui_draw_text(fb, left_x + 50, msg_y + 24,
-                             "< Arquivo encontrado, mas 0 codigos reconhecidos >",
+                             i18n_get(STR_CHEATS_ZERO_RECOGNIZED),
                              COLOR_TEXT_GOLD, 2);
 
                 char path_line[160];
-                snprintf(path_line, sizeof(path_line), "Arquivo: %s", emulator_get_cheat_file_path(s_osd_player));
+                snprintf(path_line, sizeof(path_line), i18n_get(STR_CHEATS_FILE_FMT), emulator_get_cheat_file_path(s_osd_player));
                 ui_draw_text_truncated(fb, left_x + 50, msg_y + 64, path_line, COLOR_BORDER_CYAN, 2, left_w - 100);
 
                 const char* st = emulator_get_cheat_status(s_osd_player);
@@ -2631,43 +2672,43 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
                 }
 
                 ui_draw_text(fb, left_x + 50, msg_y + 138,
-                             "O formato do arquivo pode nao conter codigos compativeis com GBA.",
+                             i18n_get(STR_CHEATS_BAD_FORMAT),
                              COLOR_TEXT_LIGHT, 2);
 
                 ui_draw_text(fb, left_x + 50, msg_y + 172,
-                             "Aperte [TRIANGULO] para tentar recarregar novamente.",
+                             i18n_get(STR_CHEATS_PRESS_TRIANGLE),
                              COLOR_TEXT_WHITE, 2);
             } else {
                 ui_draw_text(fb, left_x + 50, msg_y + 24,
-                             "< Nenhum arquivo de cheat (.cht / .cheats) encontrado >",
+                             i18n_get(STR_CHEATS_NONE_FOUND),
                              COLOR_TEXT_GOLD, 2);
 
                 const char* st = emulator_get_cheat_status(s_osd_player);
                 if (st && *st) {
                     char st_line[160];
-                    snprintf(st_line, sizeof(st_line), "Diagnostico: %s", st);
+                    snprintf(st_line, sizeof(st_line), i18n_get(STR_CHEATS_DIAG_FMT), st);
                     ui_draw_text_truncated(fb, left_x + 50, msg_y + 60, st_line, COLOR_TEXT_MUTED, 2, left_w - 100);
                 }
 
                 ui_draw_text(fb, left_x + 50, msg_y + 94,
-                             "Coloque o arquivo no Pendrive USB com qualquer uma das opcoes:",
+                             i18n_get(STR_CHEATS_USB_HINT_HDR),
                              COLOR_TEXT_WHITE, 2);
 
                 ui_draw_text(fb, left_x + 50, msg_y + 128,
-                             "1. Mesmo nome da ROM (<jogo>.cht ou <jogo>.cheats)",
+                             i18n_get(STR_CHEATS_USB_HINT_1),
                              COLOR_TEXT_LIGHT, 2);
 
                 ui_draw_text(fb, left_x + 50, msg_y + 158,
-                             "2. Codigo do jogo (ex: BPRE.cht) na raiz ou pasta cheat/ do USB",
+                             i18n_get(STR_CHEATS_USB_HINT_2),
                              COLOR_TEXT_LIGHT, 2);
 
                 ui_draw_text(fb, left_x + 50, msg_y + 188,
-                             "Aperte [TRIANGULO] a qualquer momento para buscar novamente no USB.",
+                             i18n_get(STR_CHEATS_USB_HINT_3),
                              COLOR_TEXT_GOLD, 2);
             }
         } else {
             char cht_head[160];
-            snprintf(cht_head, sizeof(cht_head), "Origem: %s  |  Jogador P%d (%d codigos)",
+            snprintf(cht_head, sizeof(cht_head), i18n_get(STR_CHEATS_ORIGIN_FMT),
                      emulator_get_cheat_file_path(s_osd_player), s_osd_player + 1, total_cheats);
             ui_draw_text_truncated(fb, left_x + 30, left_y + 70, cht_head, COLOR_BORDER_CYAN, 2, left_w - 60);
 
@@ -2702,7 +2743,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
                 uint32_t name_col = is_sel ? COLOR_TEXT_WHITE : (enabled ? COLOR_TEXT_LIGHT : (is_m ? COLOR_TEXT_GOLD : COLOR_TEXT_MUTED));
                 ui_draw_text_truncated(fb, item_x + 68, item_y + (item_h - 16) / 2,
-                                       cname ? cname : "Trapaca Sem Nome",
+                                       cname ? cname : i18n_get(STR_CHEATS_UNNAMED),
                                        name_col, 2, item_w - 80);
 
                 item_y += item_h + item_gap;
@@ -2710,7 +2751,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
             if (total_cheats > CHEAT_PAGE_SIZE) {
                 char pag_info[64];
-                snprintf(pag_info, sizeof(pag_info), "Codigo %d de %d  [L2 / R2: Pagina]",
+                snprintf(pag_info, sizeof(pag_info), i18n_get(STR_CHEATS_PAGE_FMT),
                          s_osd_cheat_cursor + 1, total_cheats);
                 ui_draw_text(fb, left_x + 30, left_y + left_h - 36, pag_info, COLOR_TEXT_GOLD, 2);
             }
@@ -2719,35 +2760,35 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "DETALHES DO CHEAT", COLOR_TEXT_GOLD, 2, side_w - 48);
+            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, i18n_get(STR_SIDE_CHEAT_DETAILS), COLOR_TEXT_GOLD, 2, side_w - 48);
             draw_rect_solid(fb, side_x + 20, left_y + 56, side_w - 40, 1, COLOR_BORDER_INNER);
 
             int ty = left_y + 80;
-            ui_draw_text(fb, side_x + 24, ty, "JOGADOR ATIVO:", COLOR_BORDER_CYAN, 2); ty += 28;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_ACTIVE_PLAYER), COLOR_BORDER_CYAN, 2); ty += 28;
             char p_tag[64];
-            snprintf(p_tag, sizeof(p_tag), "Controle P%d (Instancia %d)", s_osd_player + 1, s_osd_player);
+            snprintf(p_tag, sizeof(p_tag), i18n_get(STR_SIDE_PLAYER_INST_FMT), s_osd_player + 1, s_osd_player);
             ui_draw_text(fb, side_x + 24, ty, p_tag, COLOR_TEXT_WHITE, 2); ty += 40;
 
-            ui_draw_text(fb, side_x + 24, ty, "ARQUIVO DE TRAPACA:", COLOR_BORDER_CYAN, 2); ty += 28;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_CHEAT_FILE), COLOR_BORDER_CYAN, 2); ty += 28;
             const char* cht_f = emulator_get_cheat_file_path(s_osd_player);
             if (cht_f && *cht_f) {
                 ui_draw_text_wrapped(fb, side_x + 24, ty, cht_f, COLOR_TEXT_USB, 2, side_w - 48, 22);
                 ty += 50;
             } else {
-                ui_draw_text(fb, side_x + 24, ty, "<Nenhum arquivo>", COLOR_TEXT_MUTED, 2);
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_NO_FILE), COLOR_TEXT_MUTED, 2);
                 ty += 40;
             }
 
             const char* st_msg = emulator_get_cheat_status(s_osd_player);
             if (st_msg && *st_msg) {
-                ui_draw_text(fb, side_x + 24, ty, "STATUS DA BUSCA / LEITURA:", COLOR_BORDER_CYAN, 2); ty += 26;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_SEARCH_STATUS), COLOR_BORDER_CYAN, 2); ty += 26;
                 ui_draw_text_wrapped(fb, side_x + 24, ty, st_msg, COLOR_TEXT_MUTED, 2, side_w - 48, 20);
                 ty += 44;
             }
 
             int total_c = emulator_get_cheat_count(s_osd_player);
             if (total_c > 0 && s_osd_cheat_cursor >= 0 && s_osd_cheat_cursor < total_c) {
-                ui_draw_text(fb, side_x + 24, ty, "CODIGO SELECIONADO:", COLOR_BORDER_CYAN, 2); ty += 28;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_SEL_CODE), COLOR_BORDER_CYAN, 2); ty += 28;
                 const char* cur_name = emulator_get_cheat_name(s_osd_player, s_osd_cheat_cursor);
                 ui_draw_text_wrapped(fb, side_x + 24, ty, cur_name, COLOR_TEXT_WHITE, 2, side_w - 48, 22);
                 ty += 46;
@@ -2756,28 +2797,28 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
                 int n_codes = emulator_get_cheat_code_count(s_osd_player, s_osd_cheat_cursor);
                 bool is_m = emulator_is_cheat_master(s_osd_player, s_osd_cheat_cursor);
 
-                ui_draw_text(fb, side_x + 24, ty, "STATUS DA TRAPACA:", COLOR_BORDER_CYAN, 2); ty += 26;
-                ui_draw_text(fb, side_x + 24, ty, en ? "[X] ATIVADO" : "[ ] DESATIVADO",
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_CHEAT_STATUS), COLOR_BORDER_CYAN, 2); ty += 26;
+                ui_draw_text(fb, side_x + 24, ty, en ? i18n_get(STR_SIDE_CHEAT_ON) : i18n_get(STR_SIDE_CHEAT_OFF),
                              en ? COLOR_TEXT_GREEN : COLOR_TEXT_MUTED, 2); ty += 36;
 
-                ui_draw_text(fb, side_x + 24, ty, "CODIGOS COMPILADOS:", COLOR_BORDER_CYAN, 2); ty += 26;
+                ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_COMPILED_CODES), COLOR_BORDER_CYAN, 2); ty += 26;
                 char c_info[80];
-                snprintf(c_info, sizeof(c_info), "%d opcode(s) em memoria%s",
+                snprintf(c_info, sizeof(c_info), i18n_get(STR_SIDE_OPCODES_FMT),
                          n_codes, is_m ? " [Master/Hook]" : "");
                 ui_draw_text(fb, side_x + 24, ty, c_info,
                              n_codes > 0 ? COLOR_TEXT_WHITE : COLOR_TEXT_GOLD, 2); ty += 32;
 
                 if (is_m) {
                     ui_draw_text_wrapped(fb, side_x + 24, ty,
-                        "* Codigo Mestre (M): auto-ativado quando qualquer cheat e ligado.",
+                        i18n_get(STR_SIDE_MASTER_NOTE),
                         COLOR_TEXT_GOLD, 2, side_w - 48, 20);
                     ty += 44;
                 }
             }
 
-            ui_draw_text(fb, side_x + 24, ty, "COMO FUNCIONA:", COLOR_BORDER_CYAN, 2); ty += 30;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_HOW_IT_WORKS), COLOR_BORDER_CYAN, 2); ty += 30;
             ui_draw_text_wrapped(fb, side_x + 24, ty,
-                "Os cheats sao interpretados pela libmgba nativa (GameShark, Action Replay, CodeBreaker). A ativacao modifica a memoria do jogo em tempo real sem travar.",
+                i18n_get(STR_SIDE_CHEATS_HOW_DESC),
                 COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
         }
     }
@@ -2791,7 +2832,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         ui_refresh_save_preview_if_needed(ctx);
 
         draw_box_rpg(fb, left_x, left_y, saves_left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-        ui_draw_text(fb, left_x + 30, left_y + 24, "GERENCIAMENTO DE JOGO & SAVES", COLOR_TEXT_GOLD, 2);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_SAVES_HEADER), COLOR_TEXT_GOLD, 2);
         draw_rect_solid(fb, left_x + 20, left_y + 56, saves_left_w - 40, 1, COLOR_BORDER_INNER);
 
         int cur_slot = save_manager_get_slot();
@@ -2799,11 +2840,9 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
         char item_type[160], item_slot[160], item_save[128], item_load[128];
         if (is_grp_mode) {
-            snprintf(item_type, sizeof(item_type),
-                     "Tipo de Save: < INDIVIDUAL / [GRUPO] >");
+            snprintf(item_type, sizeof(item_type), "%s", i18n_get(STR_SAVE_TYPE_GRP));
         } else {
-            snprintf(item_type, sizeof(item_type),
-                     "Tipo de Save: < [INDIVIDUAL] / GRUPO >");
+            snprintf(item_type, sizeof(item_type), "%s", i18n_get(STR_SAVE_TYPE_IND));
         }
         snprintf(item_slot, sizeof(item_slot),
                  "Slot: < %sSlot 1%s / %sSlot 2%s / %sSlot 3%s >",
@@ -2811,17 +2850,17 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
                  cur_slot == 2 ? "[" : "", cur_slot == 2 ? "]" : "",
                  cur_slot == 3 ? "[" : "", cur_slot == 3 ? "]" : "");
 
-        snprintf(item_save, sizeof(item_save), "Salvar Estado");
-        snprintf(item_load, sizeof(item_load), "Carregar Estado");
+        snprintf(item_save, sizeof(item_save), "%s", i18n_get(STR_SAVE_ACTION_SAVE));
+        snprintf(item_load, sizeof(item_load), "%s", i18n_get(STR_SAVE_ACTION_LOAD));
 
         const char* save_items[OSD_SAVE_COUNT] = {
-            "Continuar Jogo",
+            i18n_get(STR_MENU_RESUME),
             item_type,
             item_slot,
             item_save,
             item_load,
-            "Voltar ao Launcher (Fechar ROM)",
-            "Sair do Emulador (Encerrar Aplicativo)"
+            i18n_get(STR_MENU_RESET),
+            i18n_get(STR_MENU_EXIT)
         };
 
         for (int i = 0; i < OSD_SAVE_COUNT; ++i) {
@@ -2843,7 +2882,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         draw_box_rpg(fb, saves_side_x, left_y, saves_side_w, left_h, COLOR_BG, COLOR_BORDER_CYAN);
 
         char pv_header[96];
-        snprintf(pv_header, sizeof(pv_header), "PREVIEW DO SAVE - SLOT %d", cur_slot);
+        snprintf(pv_header, sizeof(pv_header), i18n_get(STR_SAVE_PREVIEW_HDR_FMT), cur_slot);
         ui_draw_text_truncated(fb, saves_side_x + 24, left_y + 24, pv_header, COLOR_TEXT_GOLD, 2, saves_side_w - 48);
         draw_rect_solid(fb, saves_side_x + 20, left_y + 56, saves_side_w - 40, 1, COLOR_BORDER_INNER);
 
@@ -2873,7 +2912,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
                 }
             } else {
                 draw_rect_solid(fb, thumb_x, thumb_y, thumb_disp_w, thumb_disp_h, 0xFF0A1424U);
-                const char* no_thumb_msg = "[ SAVE GRAVADO - SEM MINIATURA ]";
+                const char* no_thumb_msg = i18n_get(STR_SAVE_NO_THUMB);
                 int ntw = (int)strlen(no_thumb_msg) * 8;
                 ui_draw_text(fb, thumb_x + (thumb_disp_w - ntw) / 2, thumb_y + 114, no_thumb_msg, COLOR_TEXT_GOLD, 1);
             }
@@ -2894,7 +2933,7 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
             }
             draw_rect_solid(fb, thumb_x + 14, thumb_y + 96, thumb_disp_w - 28, 48, 0xFF0B132BU);
             draw_rect_border(fb, thumb_x + 14, thumb_y + 96, thumb_disp_w - 28, 48, 1, COLOR_TAB_INACTIVE_BDR);
-            const char* empty_msg = "[ SLOT VAZIO ]";
+            const char* empty_msg = i18n_get(STR_SAVE_EMPTY_SLOT);
             int etw = (int)strlen(empty_msg) * 16;
             ui_draw_text(fb, thumb_x + (thumb_disp_w - etw) / 2, thumb_y + 112, empty_msg, COLOR_TEXT_MUTED, 2);
         }
@@ -2907,11 +2946,11 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         char line_time[80];
 
         if (s_thumb_cache_info.occupied) {
-            snprintf(line_date, sizeof(line_date), "Data: %s", s_thumb_cache_info.date_str);
-            snprintf(line_time, sizeof(line_time), "Hora: %s", s_thumb_cache_info.time_str);
+            snprintf(line_date, sizeof(line_date), i18n_get(STR_SAVE_DATE_FMT), s_thumb_cache_info.date_str);
+            snprintf(line_time, sizeof(line_time), i18n_get(STR_SAVE_TIME_FMT), s_thumb_cache_info.time_str);
         } else {
-            snprintf(line_date, sizeof(line_date), "Data: --/--/----");
-            snprintf(line_time, sizeof(line_time), "Hora: --:--:--");
+            snprintf(line_date, sizeof(line_date), "%s", i18n_get(STR_SAVE_DATE_EMPTY));
+            snprintf(line_time, sizeof(line_time), "%s", i18n_get(STR_SAVE_TIME_EMPTY));
         }
 
         ui_draw_text(fb, saves_side_x + 44, meta_y + 24, line_date,
@@ -2921,100 +2960,104 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
     } else if (s_osd_tab == OSD_TAB_VIDEO_AUDIO) {
         draw_box_rpg(fb, left_x, left_y, left_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-        ui_draw_text(fb, left_x + 30, left_y + 24, "CONFIGURACOES DE VIDEO & AUDIO", COLOR_TEXT_GOLD, 2);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_SETTINGS_TITLE), COLOR_TEXT_GOLD, 2);
         draw_rect_solid(fb, left_x + 20, left_y + 56, left_w - 40, 1, COLOR_BORDER_INNER);
 
-        char item_display[140], item_filter[140], item_scale[140], item_smooth[140];
-        char item_fps[140], item_fps_limit[140], item_audio[140], item_sfx[140];
+        char item_display[160], item_filter[160], item_scale[160], item_smooth[160];
+        char item_fps[160], item_fps_limit[160], item_audio[160], item_sfx[160], item_lang[160];
 
-        snprintf(item_display, sizeof(item_display), "Proporcao da Tela: < %s >",
+        snprintf(item_display, sizeof(item_display), i18n_get(STR_SETTING_VIDEO_MODE),
                  video_get_display_mode_name(video_get_display_mode()));
-        snprintf(item_filter, sizeof(item_filter), "Modo de Qualidade / Upscaling: < %s >",
+        snprintf(item_filter, sizeof(item_filter), i18n_get(STR_SETTING_FILTER),
                  video_get_filter_name(video_get_filter()));
-        snprintf(item_scale, sizeof(item_scale), "Fator Interno: < %s >%s",
+        snprintf(item_scale, sizeof(item_scale), i18n_get(STR_SETTING_SCALE_OSD),
                  video_get_scale_name(video_get_scale()),
                  video_get_auto_degrade_level() > 0 ? " [AUTO 60FPS]" : "");
-        snprintf(item_smooth, sizeof(item_smooth), "Suavizacao (Bilinear): < %s >",
+        snprintf(item_smooth, sizeof(item_smooth), i18n_get(STR_SETTING_SMOOTH),
                  video_get_smoothing_name(video_get_smoothing()));
-        snprintf(item_fps, sizeof(item_fps), "Contador de FPS: < %s >",
-                 s_show_fps ? "LIGADO" : "DESLIGADO");
-        snprintf(item_fps_limit, sizeof(item_fps_limit), "Bloqueio de FPS: < %s >",
+        snprintf(item_fps, sizeof(item_fps), i18n_get(STR_SETTING_SHOW_FPS),
+                 s_show_fps ? i18n_get(STR_ON) : i18n_get(STR_OFF));
+        snprintf(item_fps_limit, sizeof(item_fps_limit), i18n_get(STR_SETTING_FPS_LIMIT_OSD),
                  video_get_fps_limit_name(video_get_fps_limit()));
 
         char focus_label[64];
         if (audio_get_mode() == PS4_AUDIO_MODE_MIX) {
-            snprintf(focus_label, sizeof(focus_label), "Mix Todas as Telas");
+            snprintf(focus_label, sizeof(focus_label), "%s", i18n_get(STR_AUDIO_MIX_ALL));
         } else {
-            snprintf(focus_label, sizeof(focus_label), "Foco Player P%d",
+            snprintf(focus_label, sizeof(focus_label), i18n_get(STR_AUDIO_FOCUS_PN_FMT),
                      audio_get_focus_player() + 1);
         }
-        snprintf(item_audio, sizeof(item_audio), "Audio dos Jogadores: < %s >", focus_label);
-        snprintf(item_sfx, sizeof(item_sfx), "Sons do Menu: < %s >",
-                 audio_is_menu_sfx_enabled() ? "LIGADO" : "DESLIGADO");
+        snprintf(item_audio, sizeof(item_audio), i18n_get(STR_SETTING_AUDIO_PLAYERS), focus_label);
+        snprintf(item_sfx, sizeof(item_sfx), i18n_get(STR_SETTING_AUDIO_SFX),
+                 audio_is_menu_sfx_enabled() ? i18n_get(STR_ON) : i18n_get(STR_OFF));
+        snprintf(item_lang, sizeof(item_lang), "%s", i18n_get(STR_SETTING_LANGUAGE));
 
         const char* cfg_items[OSD_CFG_COUNT] = {
-            item_display, item_filter, item_scale, item_smooth, item_fps, item_fps_limit, item_audio, item_sfx
+            item_display, item_filter, item_scale, item_smooth, item_fps, item_fps_limit, item_audio, item_sfx, item_lang
         };
 
         for (int i = 0; i < OSD_CFG_COUNT; ++i) {
             bool is_sel = (s_osd_cfg_cursor == i);
-            int row_y = left_y + 72 + i * 68;
+            int row_y = left_y + 70 + i * 62;
 
             if (is_sel) {
-                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 48, COLOR_ITEM_SEL_BG);
-                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 48, 1, COLOR_BORDER_CYAN);
+                draw_rect_solid(fb, left_x + 20, row_y - 6, left_w - 40, 46, COLOR_ITEM_SEL_BG);
+                draw_rect_border(fb, left_x + 20, row_y - 6, left_w - 40, 46, 1, COLOR_BORDER_CYAN);
             }
 
             char line[200];
             snprintf(line, sizeof(line), "%s %s", is_sel ? ">" : " ", cfg_items[i]);
-            ui_draw_text_truncated(fb, left_x + 30, row_y + 10, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, left_w - 50);
+            ui_draw_text_truncated(fb, left_x + 30, row_y + 9, line, is_sel ? COLOR_TEXT_GOLD : COLOR_TEXT_LIGHT, 2, left_w - 50);
         }
 
         ui_draw_text_truncated(fb, left_x + 30, left_y + 668,
-                               "[ESQUERDA / DIREITA / X] Alterar em Tempo Real",
+                               i18n_get(STR_OSD_VA_HINT),
                                COLOR_TEXT_MUTED, 2, left_w - 50);
 
 
         if (side_w > 120) {
             draw_box_rpg(fb, side_x, left_y, side_w, left_h, COLOR_BG, COLOR_BORDER_BLUE);
-            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, "TELEMETRIA DE VIDEO", COLOR_TEXT_GOLD, 2, side_w - 48);
+            ui_draw_text_truncated(fb, side_x + 24, left_y + 24, i18n_get(STR_SIDE_VIDEO_TELEMETRY), COLOR_TEXT_GOLD, 2, side_w - 48);
             draw_rect_solid(fb, side_x + 20, left_y + 56, side_w - 40, 1, COLOR_BORDER_INNER);
 
             int ty = left_y + 80;
-            ui_draw_text(fb, side_x + 24, ty, "SAIDA DE VIDEO:", COLOR_BORDER_CYAN, 2); ty += 28;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_VIDEO_OUT_LBL), COLOR_BORDER_CYAN, 2); ty += 28;
             ui_draw_text(fb, side_x + 24, ty, "1920x1080p 60Hz", COLOR_TEXT_WHITE, 2); ty += 40;
 
-            ui_draw_text(fb, side_x + 24, ty, "ACELERACAO GRAFICA:", COLOR_BORDER_CYAN, 2); ty += 28;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_GFX_ACCEL_LBL), COLOR_BORDER_CYAN, 2); ty += 28;
             ui_draw_text(fb, side_x + 24, ty, "SIMD SSE2 Zero-Copy", COLOR_TEXT_WHITE, 2); ty += 40;
 
-            ui_draw_text(fb, side_x + 24, ty, "ATALHO DE AUDIO:", COLOR_BORDER_CYAN, 2); ty += 28;
-            ui_draw_text(fb, side_x + 24, ty, "[L3 + R3] Foco no seu P#", COLOR_TEXT_USB, 2); ty += 40;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_AUDIO_SHORTCUT_LBL), COLOR_BORDER_CYAN, 2); ty += 28;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_AUDIO_SHORTCUT_VAL), COLOR_TEXT_USB, 2); ty += 40;
 
-            ui_draw_text(fb, side_x + 24, ty, "INFORMACOES DA OPCAO:", COLOR_BORDER_CYAN, 2); ty += 30;
+            ui_draw_text(fb, side_x + 24, ty, i18n_get(STR_SIDE_OPT_INFO_LBL), COLOR_BORDER_CYAN, 2); ty += 30;
             switch (s_osd_cfg_cursor) {
             case OSD_CFG_DISPLAY:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Alterna entre proporcao 3:2 nativa e preenchimento 16:9 completo.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_DISPLAY_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_FILTER:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Filtro grafico de reconstrucao: Pixel Puro, ScaleNx ou HQx/xBR.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_FILTER_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_SCALE:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Multiplicador de escala interna para renderizacao de alta definicao.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_SCALE_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_SMOOTH:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Filtro bilinear para remocao de flicker em telas planas modernas.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_SMOOTH_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_SHOW_FPS:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Liga ou desliga o medidor de FPS no canto da tela.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_FPS_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_FPS_LIMIT:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Trava a taxa de quadros em 60 FPS ou 30 FPS.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_FPS_LIM_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_AUDIO_FOCUS:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Alterna audio entre mix geral e foco isolado em uma das telas.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_AUDIO_DESC_O), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             case OSD_CFG_MENU_SFX:
-                ui_draw_text_wrapped(fb, side_x + 24, ty, "Ativa ou desativa os efeitos sonoros ao navegar pelas abas e opcoes dos menus. O audio do jogo em execucao continua funcionando normalmente.", COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_SFX_DESC), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
+                break;
+            case OSD_CFG_LANGUAGE:
+                ui_draw_text_wrapped(fb, side_x + 24, ty, i18n_get(STR_INFO_LANG_DESC), COLOR_TEXT_LIGHT, 2, side_w - 48, 22);
                 break;
             default:
                 break;
@@ -3025,22 +3068,22 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
         int cable_panel_h = s_show_dev_telemetry ? 320 : 660;
         draw_box_rpg(fb, left_x, left_y, total_avail_w, cable_panel_h, COLOR_BG, COLOR_BORDER_BLUE);
 
-        ui_draw_text(fb, left_x + 30, left_y + 24, "CONEXAO E ESTADO DO LINK CABLE", COLOR_TEXT_GOLD, 2);
+        ui_draw_text(fb, left_x + 30, left_y + 24, i18n_get(STR_LINK_HEADER), COLOR_TEXT_GOLD, 2);
         draw_rect_solid(fb, left_x + 20, left_y + 56, total_avail_w - 40, 1, COLOR_BORDER_INNER);
 
         const char* cable_state_str = link_hub_is_hotplugging()
-                                          ? "RECONECTANDO..."
-                                          : (link_hub_is_cable_enabled() ? "CONECTADO" : "DESCONECTADO");
+                                          ? i18n_get(STR_LINK_RECONNECTING)
+                                          : (link_hub_is_cable_enabled() ? i18n_get(STR_LINK_CONNECTED) : i18n_get(STR_LINK_DISCONNECTED));
 
         char item_cable[140], item_dev[140];
-        snprintf(item_cable, sizeof(item_cable), "Estado do Cabo: < %s >", cable_state_str);
-        snprintf(item_dev, sizeof(item_dev), "[%c] Opcoes de Desenvolvedor / Telemetria",
+        snprintf(item_cable, sizeof(item_cable), i18n_get(STR_LINK_STATE_FMT), cable_state_str);
+        snprintf(item_dev, sizeof(item_dev), i18n_get(STR_LINK_DEV_TELEMETRY_FMT),
                  s_show_dev_telemetry ? 'X' : ' ');
 
         const char* link_items[OSD_LINK_COUNT] = {
             item_cable,
-            "[X] Reconectar Link Cable (Simular Hotplug)",
-            "Modo do Cabo: < Multi-player (GBA Link) >",
+            i18n_get(STR_LINK_HOTPLUG_ITEM),
+            i18n_get(STR_LINK_MODE_ITEM),
             item_dev
         };
 
@@ -3064,23 +3107,23 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
             int tele_h = 360;
             draw_box_rpg(fb, left_x, tele_y, total_avail_w, tele_h, COLOR_BG, COLOR_BORDER_CYAN);
 
-            ui_draw_text(fb, left_x + 30, tele_y + 20, "TELEMETRIA DETALHADA DAS 4 PORTAS GBA SIO", COLOR_TEXT_GOLD, 2);
+            ui_draw_text(fb, left_x + 30, tele_y + 20, i18n_get(STR_LINK_TELE_HEADER), COLOR_TEXT_GOLD, 2);
             draw_rect_solid(fb, left_x + 20, tele_y + 48, total_avail_w - 40, 1, COLOR_BORDER_INNER);
 
             uint32_t xfer_pkts = link_hub_get_transfer_count();
             char pkts_str[96];
-            snprintf(pkts_str, sizeof(pkts_str), "Pacotes trocados: %u  |  Buffer: Lockless Ring Buffer em RAM", xfer_pkts);
+            snprintf(pkts_str, sizeof(pkts_str), i18n_get(STR_LINK_PKTS_FMT), xfer_pkts);
             ui_draw_text(fb, left_x + 30, tele_y + 64, pkts_str, COLOR_TEXT_WHITE, 2);
 
             for (int p = 0; p < GBA_MAX_INSTANCES; ++p) {
                 int mode = link_hub_get_player_mode(p);
-                const char* mode_name = (mode == GBA_SIO_MULTI) ? "MULTI (Multiplayer 4P)" :
-                                        (mode == GBA_SIO_NORMAL_32) ? "NORM32 (Transferencia 32-bit)" :
-                                        (mode == GBA_SIO_NORMAL_8) ? "NORM8 (Transferencia 8-bit)" :
-                                        (mode == GBA_SIO_GPIO) ? "GPIO (Linha)" : "IDLE";
+                const char* mode_name = (mode == GBA_SIO_MULTI) ? i18n_get(STR_LINK_MODE_MULTI) :
+                                        (mode == GBA_SIO_NORMAL_32) ? i18n_get(STR_LINK_MODE_NORM32) :
+                                        (mode == GBA_SIO_NORMAL_8) ? i18n_get(STR_LINK_MODE_NORM8) :
+                                        (mode == GBA_SIO_GPIO) ? i18n_get(STR_LINK_MODE_GPIO) : "IDLE";
 
                 char p_info[140];
-                snprintf(p_info, sizeof(p_info), "GBA Player %d (%s): Modo [%s]",
+                snprintf(p_info, sizeof(p_info), i18n_get(STR_LINK_PLAYER_MODE_FMT),
                          p + 1, (p == 0 ? "Master Clock" : "Slave"), mode_name);
 
                 bool is_active_mode = (mode == GBA_SIO_MULTI || mode == GBA_SIO_NORMAL_32 ||
@@ -3092,9 +3135,9 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
             /* Informacao limpa e formatada sobre o cabo */
             int tip_y = left_y + 350;
             draw_box_rpg(fb, left_x + 20, tip_y, total_avail_w - 40, 140, 0xFF14243BU, COLOR_BORDER_BLUE);
-            ui_draw_text(fb, left_x + 40, tip_y + 24, "COMO FUNCIONA O LINK CABLE:", COLOR_TEXT_GOLD, 2);
-            ui_draw_text(fb, left_x + 40, tip_y + 60, "- O cabo virtual conecta em memoria todas as portas GBA em tempo real.", COLOR_TEXT_LIGHT, 2);
-            ui_draw_text(fb, left_x + 40, tip_y + 96, "- Se perder sincronia, selecione reconectar.", COLOR_TEXT_USB, 2);
+            ui_draw_text(fb, left_x + 40, tip_y + 24, i18n_get(STR_LINK_HOW_TITLE), COLOR_TEXT_GOLD, 2);
+            ui_draw_text(fb, left_x + 40, tip_y + 60, i18n_get(STR_LINK_HOW_L1), COLOR_TEXT_LIGHT, 2);
+            ui_draw_text(fb, left_x + 40, tip_y + 96, i18n_get(STR_LINK_HOW_L2), COLOR_TEXT_USB, 2);
         }
 
     } else if (s_osd_tab == OSD_TAB_CONTROLS) {
@@ -3132,15 +3175,15 @@ void ui_menu_render_osd(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
     if (s_osd_tab == OSD_TAB_CONTROLS) {
         ui_draw_text_truncated(fb, box_x + 40, box_y + box_h - 40,
-                               "[D-PAD] Navegar   [O / OPTIONS] Voltar ao Jogo   [TOUCHPAD] Alternar Visualizacao (DualShock 4 / Game Boy Advance)",
+                               i18n_get(STR_FOOTER_OSD_CTRL),
                                COLOR_TEXT_MUTED, 2, box_w - 80);
     } else if (s_osd_tab == OSD_TAB_CHEATS) {
         ui_draw_text_truncated(fb, box_x + 40, box_y + box_h - 40,
-                               "[D-PAD] Navegar   [X] Ativar/Desativar Trapaca   [L2 / R2] Pagina   [TRIANGULO] Buscar .cht Novamente   [O / OPTIONS] Voltar",
+                               i18n_get(STR_FOOTER_OSD_CHEATS),
                                COLOR_TEXT_MUTED, 2, box_w - 80);
     } else {
         ui_draw_text_truncated(fb, box_x + 40, box_y + box_h - 40,
-                               "[D-PAD] Navegar / Trocar Slot   [X] Confirmar   [O / OPTIONS] Voltar ao Jogo   [TOUCHPAD] Ajuda/Detalhes",
+                               i18n_get(STR_FOOTER_OSD_DEF),
                                COLOR_TEXT_MUTED, 2, box_w - 80);
     }
 }
