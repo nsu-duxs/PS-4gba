@@ -48,6 +48,7 @@ bool ui_menu_is_fps_visible(void);
 void ui_menu_set_fps_visible(bool visible);
 void ui_menu_trigger_join_hint(void);
 void ui_menu_render_join_hint(uint32_t* fb, struct PS4GBA_Context* ctx);
+void ui_menu_set_interacting_player(int player_index);
 
 void ui_menu_update_splash(uint32_t buttons_pressed);
 void ui_menu_update_disclaimer(uint32_t buttons_pressed);

@@ -144,6 +144,7 @@ void input_poll_all(struct PS4GBA_Context* ctx) {
 
         if (app_state == UI_STATE_SPLASH) {
             if (newly_pressed) {
+                ui_menu_set_interacting_player(i);
                 ui_menu_update_splash(newly_pressed);
                 app_state = ui_menu_get_state();
             }
@@ -152,6 +153,7 @@ void input_poll_all(struct PS4GBA_Context* ctx) {
 
         if (app_state == UI_STATE_DISCLAIMER) {
             if (newly_pressed) {
+                ui_menu_set_interacting_player(i);
                 ui_menu_update_disclaimer(newly_pressed);
                 app_state = ui_menu_get_state();
             }

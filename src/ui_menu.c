@@ -3,6 +3,7 @@
 #include "video_split.h"
 #include "audio_ps4.h"
 #include "save_manager.h"
+#include "input_ds4.h"
 #include "link_cable_hub.h"
 #include "ps4_jailbreak.h"
 #include "i18n.h"
@@ -12,6 +13,7 @@
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <math.h>
 #include <orbis/Pad.h>
 
@@ -115,6 +117,12 @@ static volatile bool s_should_quit = false;
 static int s_splash_frame = 0;
 static bool s_show_fps = true;
 static int s_join_hint_frames = 0;
+
+#define UI_DISCLAIMER_DIR        "/data/PSgba"
+#define UI_DISCLAIMER_FLAG_PATH  "/data/PSgba/disclaimer_accepted.bin"
+
+static int s_disclaimer_frame = 0;
+static int s_interacting_player = 0;
 
 /* Painel Lateral de Informacoes Extras (Oculto por padrao + toggle Touchpad) */
 static bool s_show_side_panel = false;
@@ -1143,6 +1151,9 @@ void ui_menu_init(void) {
     ui_menu_scan_roms();
     s_app_state = UI_STATE_SPLASH;
     s_splash_frame = 0;
+    s_disclaimer_frame = 0;
+    s_interacting_player = 0;
+
     s_launcher_tab = LAUNCHER_TAB_GAMES;
     s_launcher_rom_cursor = 0;
     s_launcher_va_cursor = 0;
@@ -1273,40 +1284,104 @@ void ui_menu_render_join_hint(uint32_t* fb, struct PS4GBA_Context* ctx) {
 
 /* ==============================================================================
  * TERMO DE USO / AVISO ANTI-PIRATARIA (FIRST-TIME RUN DISCLAIMER)
- * Persistencia em disco persistente no PS4: /data/PSgba/disclaimer_accepted.bin
+ * Isolamento persistente por usuario: /data/PSgba/users/0x<UID>/disclaimer_accepted.bin
+ * Cada perfil (Admin, Convidado, Secundario) tem seu proprio registro persistido.
  * ============================================================================== */
 
-#define UI_DISCLAIMER_DIR        "/data/PSgba"
-#define UI_DISCLAIMER_FLAG_PATH  "/data/PSgba/disclaimer_accepted.bin"
+static void ui_ensure_dir_recursive(const char* dir_path) {
+    if (!dir_path || dir_path[0] == '\0') {
+        return;
+    }
 
-static int s_disclaimer_frame = 0;
+    char tmp[256];
+    strncpy(tmp, dir_path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    size_t len = strlen(tmp);
+    if (len > 1 && tmp[len - 1] == '/') {
+        tmp[len - 1] = '\0';
+    }
+
+    for (char* p = tmp + 1; *p; ++p) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0777);
+            *p = '/';
+        }
+    }
+    mkdir(tmp, 0777);
+}
+
+void ui_menu_set_interacting_player(int player_index) {
+    if (player_index >= 0 && player_index < GBA_MAX_INSTANCES) {
+        s_interacting_player = player_index;
+    }
+}
+
+static uint32_t ui_get_current_user_id(void) {
+    OrbisUserServiceUserId pad_uid = input_get_user_id(s_interacting_player);
+    if (pad_uid > 0 && pad_uid != ORBIS_USER_SERVICE_USER_ID_SYSTEM) {
+        return (uint32_t)pad_uid;
+    }
+    uint32_t active_uid = save_manager_get_active_user_id();
+    if (active_uid > 0 && active_uid != ORBIS_USER_SERVICE_USER_ID_SYSTEM) {
+        return active_uid;
+    }
+    return 0x10000001;
+}
 
 static bool ui_disclaimer_is_accepted(void) {
+    uint32_t uid = ui_get_current_user_id();
+
+    char user_flag[256];
+    snprintf(user_flag, sizeof(user_flag), "%s/0x%08X/disclaimer_accepted.bin",
+             PS4_PSGBA_USERS_DIR, uid);
+
     struct stat st;
-    if (stat(UI_DISCLAIMER_FLAG_PATH, &st) == 0) {
+    if (stat(user_flag, &st) == 0 && st.st_size > 0) {
         return true;
     }
-    if (stat("/data/gba4p/disclaimer_accepted.bin", &st) == 0) {
-        return true;
+
+    /* Compatibilidade para usuario principal em transicao */
+    if (uid == 0x10000001) {
+        if (stat(UI_DISCLAIMER_FLAG_PATH, &st) == 0 && st.st_size > 0) {
+            return true;
+        }
     }
+
     return false;
 }
 
 static void ui_disclaimer_mark_accepted(void) {
-    mkdir("/data", 0777);
-    mkdir(UI_DISCLAIMER_DIR, 0777);
-    FILE* f = fopen(UI_DISCLAIMER_FLAG_PATH, "wb");
+    uint32_t uid = ui_get_current_user_id();
+
+    ps4_jailbreak_system();
+
+    char user_dir[256];
+    snprintf(user_dir, sizeof(user_dir), "%s/0x%08X", PS4_PSGBA_USERS_DIR, uid);
+    ui_ensure_dir_recursive(user_dir);
+
+    char user_flag[256];
+    snprintf(user_flag, sizeof(user_flag), "%s/disclaimer_accepted.bin", user_dir);
+
+    FILE* f = fopen(user_flag, "wb");
     if (f) {
         uint8_t flag = 1;
         fwrite(&flag, 1, sizeof(flag), f);
+        fflush(f);
         fclose(f);
     }
-    mkdir("/data/gba4p", 0777);
-    FILE* f2 = fopen("/data/gba4p/disclaimer_accepted.bin", "wb");
-    if (f2) {
-        uint8_t flag = 1;
-        fwrite(&flag, 1, sizeof(flag), f2);
-        fclose(f2);
+
+    /* Se for o perfil principal, mantem espelho legado para retrocompatibilidade */
+    if (uid == 0x10000001) {
+        ui_ensure_dir_recursive(UI_DISCLAIMER_DIR);
+        FILE* f_leg = fopen(UI_DISCLAIMER_FLAG_PATH, "wb");
+        if (f_leg) {
+            uint8_t flag = 1;
+            fwrite(&flag, 1, sizeof(flag), f_leg);
+            fflush(f_leg);
+            fclose(f_leg);
+        }
     }
 }
 
